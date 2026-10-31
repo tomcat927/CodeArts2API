@@ -98,6 +98,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+          pattern: codearts2api-*
 
       - name: 生成校验和
         run: |
