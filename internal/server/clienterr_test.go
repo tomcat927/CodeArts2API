@@ -81,3 +81,39 @@ func TestHardFailureStillMarksAccount(t *testing.T) {
 		t.Errorf("401 应把账号标为 error，实际 %q", acct.Status)
 	}
 }
+
+// multimodalMismatchErr 模拟「给非多模态模型发送图片」时上游返回的 406。
+//
+// 实测原文：HTTP 406 InferHub.001001020.406 The request model is not multimodal
+func multimodalMismatchErr() error {
+	return codearts.UpstreamBusinessError(406,
+		"406: InferHub.001001020.406 The request model is not multimodal")
+}
+
+// TestMultimodalMismatchKeepsAccountHealthy 回归：406 模态不符属于请求侧错误，
+// 不得计入账号失败。
+//
+// 线上现象（2026-10-31）：客户端把带图片的请求发给 deepseek-v4.1-flash /
+// openpangu-2.0-* / kimi-k3 / glm-5.2-sft-harmony 等纯文本模型，上游回 406，
+// 网关把 5 个账号中的 4 个标记成 error（failures=9）。
+func TestMultimodalMismatchKeepsAccountHealthy(t *testing.T) {
+	s := newTestServer(t, 2, 3)
+
+	_, err := s.withAccountRetry(context.Background(), 5*time.Second,
+		func(context.Context, *codearts.Account) error {
+			return multimodalMismatchErr()
+		})
+	if err == nil {
+		t.Fatal("应返回错误给客户端")
+	}
+
+	for _, id := range []string{"a", "b"} {
+		acct := s.Store.Account(id)
+		if acct.Failures != 0 {
+			t.Errorf("账号 %s 被 406 计入失败: failures=%d", id, acct.Failures)
+		}
+		if acct.Status != "ok" {
+			t.Errorf("账号 %s 被 406 标记为 %q", id, acct.Status)
+		}
+	}
+}

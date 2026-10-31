@@ -212,12 +212,18 @@ func IsTransientUpstream(err error) bool {
 
 // clientRequestStatuses 是「请求本身有问题」会用到的状态码。
 //
-// 400 参数越界 / 422 语义不合法 / 413 体积超限，三者都只能由客户端改请求解决。
+// 400 参数越界 / 422 语义不合法 / 413 体积超限 / 406 模态不符，四者都只能由客户端改请求解决。
 // 401 / 403 / 404 刻意不在此列：它们更可能是账号或上游侧的问题。
+//
+// 406 是实测补充：给非多模态模型（deepseek-v4.1-flash、openpangu-2.0-*、kimi-k3、
+// glm-5.2-sft-harmony 等）发送带图片的请求时，上游返回
+// `HTTP 406 InferHub.001001020.406 The request model is not multimodal`。
+// 漏掉 406 会让一次客户端误用被记为账号故障，累计到阈值后把健康账号标成 error。
 var clientRequestStatuses = []int{
 	http.StatusBadRequest,
 	http.StatusRequestEntityTooLarge,
 	http.StatusUnprocessableEntity,
+	http.StatusNotAcceptable,
 }
 
 // credentialCodes 是「账号侧」的签名 / 凭据类错误码。
