@@ -525,6 +525,11 @@ Anthropic 侧映射为 `thinking` 内容块。
 > **请求本身不合法时不换号重试、也不计账号故障。** 参数越界（`temperature=99`、
 > `max_tokens` 超限、tools 超长）换哪个账号都一样，网关直接把上游的
 > `details[].error_msg` 带回来，账号保持 `ok`、`failures` 不变。
+> 同一类还有两种实测情况：给纯文本模型发图片（`HTTP 406
+> InferHub.001001020.406 The request model is not multimodal`，图片只发
+> `Qwen3-VL-235B` / `kimi-k2.6-vl`），以及输入命中内容审核（`HTTP 403
+> ModelArts.81011` / `Input image May contain sensitive information`）——
+> 两者都只取决于请求内容，换号同样被拒，因此同样不计账号故障。
 > 反过来，`APIG.*` / `STS5.*` 这类凭据错误即使以 `400` 返回，仍会计入账号故障。
 >
 > **网关侧限流与上游 429 是两件事**：前者是「这个密钥自己打得太快」，响应会带

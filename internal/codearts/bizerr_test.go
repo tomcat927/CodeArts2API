@@ -140,3 +140,50 @@ func TestIsTransientUpstreamUnaffected(t *testing.T) {
 		t.Error("参数错误不该判为临时故障")
 	}
 }
+
+// TestContentModerationIsClientRequestError 回归：内容审核拒绝属于请求侧，
+// 不得计入账号故障，也不得换账号重试。
+//
+// 线上现象（2026-11-01）：向 kimi-k2.6-vl 上传被判敏感的图片，上游回 HTTP 403
+// ModelArts.81011，网关把它当账号故障，7 个账号里 6 个被标 error。
+func TestContentModerationIsClientRequestError(t *testing.T) {
+	moderation := []*UpstreamError{
+		{Status: http.StatusForbidden, Message: `403: {"error_msg":"抱歉，我无法提供关于您提问内容的建议。","error_code":"ModelArts.81011","error":{"code":"ModelArts.81011","message":"Input image May contain sensitive information, please try again.","type":"Forbidden"}}`},
+		{Status: http.StatusForbidden, Message: "403: 抱歉，我无法提供关于您提问内容的建议。作为 AI 编程助手，我更擅长协助您处理代码编写。"},
+		{Status: http.StatusForbidden, Message: "403: Input image May contain sensitive information, please try again."},
+	}
+	for _, e := range moderation {
+		if !IsContentModerationError(e) {
+			t.Errorf("%q 应识别为内容审核拒绝", e.Error())
+		}
+		if !IsClientRequestError(e) {
+			t.Errorf("%q 应判定为客户端请求错误", e.Error())
+		}
+		if IsTransientUpstream(e) {
+			t.Errorf("%q 不该判为临时故障（否则换号重试白烧积分）", e.Error())
+		}
+	}
+
+	// 包装一层也要识别
+	if !IsClientRequestError(fmt.Errorf("chat 请求失败: %w", moderation[0])) {
+		t.Error("包装后的审核拒绝应仍被识别为请求侧错误")
+	}
+}
+
+// TestForbiddenIsNotABlanketClientRequestError 403 不能一刀切成请求侧：
+// 学生认证 / 权限类 403 属于账号侧，必须继续计数。
+func TestForbiddenIsNotABlanketClientRequestError(t *testing.T) {
+	accountErrs := []*UpstreamError{
+		{Status: http.StatusForbidden, Message: `403: {"error_code":"TM.00001027","error_msg":"未通过学生认证，无法访问教育模型"}`},
+		{Status: http.StatusForbidden, Message: "403: access denied"},
+		{Status: http.StatusForbidden, Message: ""},
+	}
+	for _, e := range accountErrs {
+		if IsClientRequestError(e) {
+			t.Errorf("%q 不该判定为客户端请求错误（属于账号/权限问题）", e.Error())
+		}
+		if IsContentModerationError(e) {
+			t.Errorf("%q 不该识别为内容审核拒绝", e.Error())
+		}
+	}
+}

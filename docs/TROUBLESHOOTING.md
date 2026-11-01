@@ -93,6 +93,8 @@ docker compose run -e CODEARTS_ADMIN_PASSWORD='your-strong-password' codearts2ap
 | `502` + `upstream_error` | 上游 5xx / 网络错误 | 稍后重试；检查出网与代理 |
 | `503` + `server_error` | 账号池为空 | 控制台导入账号 |
 | `406` / `The model not equals requestHeader's Model-Id` | 模型名与请求头不一致（常见于别名里带空格或大小写不同） | 别名值必须与上游模型名**完全一致** |
+| `406` / `InferHub.001001020.406 The request model is not multimodal` | 给纯文本模型发了带图片的请求 | 图片请求只发 `Qwen3-VL-235B` / `kimi-k2.6-vl`。v0.1.0 起不计账号故障 |
+| `400` / `ModelArts.81011`（上游原文是 `HTTP 403`，含 `Input image May contain sensitive information`） | 输入的图片或文本命中上游内容审核 | 换掉被判敏感的内容再试。v0.1.2 起不计账号故障、不换号重试（换号同样被拒） |
 
 ### `404` + 模型名不存在
 

@@ -214,6 +214,7 @@ func IsTransientUpstream(err error) bool {
 //
 // 400 参数越界 / 422 语义不合法 / 413 体积超限 / 406 模态不符，四者都只能由客户端改请求解决。
 // 401 / 403 / 404 刻意不在此列：它们更可能是账号或上游侧的问题。
+// 例外是 403 的**内容审核拒绝**，由 moderationMarkers 单独识别（见 IsClientRequestError）。
 //
 // 406 是实测补充：给非多模态模型（deepseek-v4.1-flash、openpangu-2.0-*、kimi-k3、
 // glm-5.2-sft-harmony 等）发送带图片的请求时，上游返回
@@ -237,6 +238,34 @@ var credentialCodes = []string{
 	"invalid_grant",
 }
 
+// moderationMarkers 是「内容审核拒绝」的特征串。
+//
+// 实测两种形态（2026-11-01，向 kimi-k2.6-vl 上传图片）：
+//   - HTTP 403 `{"error_code":"ModelArts.81011","error_msg":"Input image May
+//     contain sensitive information, please try again."}`
+//   - HTTP 403 纯文本模板话术「抱歉，我无法提供关于您提问内容的建议……」（不带业务码）
+//
+// 两者都只由**请求内容**决定：换账号重试同样被拒，还每次都白烧积分。
+var moderationMarkers = []string{
+	"ModelArts.81011",
+	"Input image May contain sensitive information",
+	"我无法提供关于您提问内容的建议",
+}
+
+// IsContentModerationError 报告上游是否以「内容审核拒绝」回绝了这次请求。
+func IsContentModerationError(err error) bool {
+	ue := asUpstreamError(err)
+	if ue == nil {
+		return false
+	}
+	for _, m := range moderationMarkers {
+		if strings.Contains(ue.Message, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsClientRequestError 报告这个上游错误是否由**请求本身**引起，与账号无关。
 //
 // 上游对参数非法（max_tokens 越界、temperature 越界、tools 超长等）会返回
@@ -245,12 +274,18 @@ var credentialCodes = []string{
 //
 // 判定是「状态码 + 排除项」，不是只看 4xx：
 //   - 400 / 413 / 422 默认归为请求问题；
+//   - 内容审核拒绝（实测用 403）按特征串识别，不看状态码；
 //   - 但「空 body 的 400」是「该模型只支持流式」，有自己的重试路径，不是参数问题；
 //   - 凭据 / 签名类错误码哪怕用 400 表达，也必须计入账号故障。
 func IsClientRequestError(err error) bool {
 	ue := asUpstreamError(err)
 	if ue == nil {
 		return false
+	}
+	// 内容审核拒绝：状态码可能是 403（不在下面的请求侧状态码列表里），
+	// 但成因同样在请求内容上，换账号没有意义。
+	if IsContentModerationError(ue) {
+		return true
 	}
 	matched := false
 	for _, status := range clientRequestStatuses {

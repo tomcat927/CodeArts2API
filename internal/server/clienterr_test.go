@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -114,6 +115,44 @@ func TestMultimodalMismatchKeepsAccountHealthy(t *testing.T) {
 		}
 		if acct.Status != "ok" {
 			t.Errorf("账号 %s 被 406 标记为 %q", id, acct.Status)
+		}
+	}
+}
+
+// moderationErr 模拟「输入内容被判敏感」时上游返回的 403。
+//
+// 实测原文（kimi-k2.6-vl 上传图片）：
+// HTTP 403 {"error_code":"ModelArts.81011","error":{"message":
+// "Input image May contain sensitive information, please try again."}}
+func moderationErr() error {
+	return codearts.UpstreamBusinessError(http.StatusForbidden,
+		`403: {"error_msg":"抱歉，我无法提供关于您提问内容的建议。","error_code":"ModelArts.81011"}`)
+}
+
+// TestContentModerationKeepsAccountHealthy 回归：内容审核拒绝属于请求侧，
+// 既不计入账号故障，也不该换号重试。
+//
+// 线上现象（2026-11-01）：同一张被判敏感的图片让 7 个账号里 6 个被标成 error。
+func TestContentModerationKeepsAccountHealthy(t *testing.T) {
+	s := newTestServer(t, 2, 3)
+
+	var attempts int
+	_, err := s.withAccountRetry(context.Background(), 5*time.Second,
+		func(context.Context, *codearts.Account) error {
+			attempts++
+			return moderationErr()
+		})
+	if err == nil {
+		t.Fatal("应返回错误给客户端")
+	}
+	if attempts != 1 {
+		t.Errorf("审核拒绝被换号重试了 %d 次，期望只尝试 1 次", attempts)
+	}
+	for _, id := range []string{"a", "b"} {
+		acct := s.Store.Account(id)
+		if acct.Failures != 0 || acct.Status != "ok" {
+			t.Errorf("账号 %s 被审核拒绝计入故障: failures=%d status=%q",
+				id, acct.Failures, acct.Status)
 		}
 	}
 }
