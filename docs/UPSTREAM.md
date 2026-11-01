@@ -64,6 +64,24 @@ OAuth 客户端标识：`client_id = codearts-agent`（= 客户端 `product.json
 可在控制台「设置 → 上游身份头」覆盖前四项（`plugin-name` / `plugin-version` /
 `ide-name` / `ide-version`），便于上游版本变更后无需改代码即可跟随。
 
+### 2.1 账号身份回查：`GET https://sts.cn-north-4.myhuaweicloud.com/v5/caller-identity`
+
+用账号的凭据直接问「我是谁」，浏览器登录导入后用来补 `account_label` 与 `domain_id`。
+实测响应是 **urn 形态，没有 `user` 对象**（2026-11-01）：
+
+```json
+{"account_id":"01a17825504779df8447435613fb1617",
+ "principal_id":"01a1782550477a3a80ea7fe808b1eb9c",
+ "principal_urn":"iam::01a17825504779df8447435613fb1617:user:hw010922006740496"}
+```
+
+- 账号名 = `principal_urn` 最后一段（`user:` / `group:` 之后）；
+- `domain_id` = `account_id`；用户 ID = `principal_id`。
+
+只认 `user.{id,name,domain_id}` 的旧解析会全空且不报错，结果所有导入账号都
+退回 `CodeArts <AK 短 id>` 这种无法对照手机号的临时名 —— v0.1.3 已修，
+回归测试在 `internal/codearts/calleridentity_test.go`。
+
 ---
 
 ## 3. 通道：只剩积分（credit）

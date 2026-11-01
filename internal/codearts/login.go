@@ -647,17 +647,62 @@ func (c *Client) CallerIdentity(ctx context.Context, sess *Session) (id, name, d
 	if resp.StatusCode != http.StatusOK {
 		return "", "", "", &UpstreamError{Status: resp.StatusCode, Message: truncate(string(raw), 200)}
 	}
-	var out struct {
-		User struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			DomainID string `json:"domain_id"`
-		} `json:"user"`
-	}
+	var out callerIdentityResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", "", "", err
 	}
-	return out.User.ID, out.User.Name, out.User.DomainID, nil
+	id, name, domainID = parseCallerIdentity(&out)
+	if name == "" && id == "" && domainID == "" {
+		return "", "", "", fmt.Errorf("caller-identity 响应里没有账号信息: %s", truncate(string(raw), 160))
+	}
+	return id, name, domainID, nil
+}
+
+// callerIdentityResponse 是 /v5/caller-identity 的响应结构。
+type callerIdentityResponse struct {
+	AccountID    string `json:"account_id"`
+	PrincipalID  string `json:"principal_id"`
+	PrincipalURN string `json:"principal_urn"`
+	User         struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		DomainID string `json:"domain_id"`
+	} `json:"user"`
+}
+
+// parseCallerIdentity 从响应里取「用户 ID / 账号名 / 域 ID」。
+//
+// 实测（2026-11-01，sts.cn-north-4 /v5/caller-identity）返回的是 urn 形态，**没有**
+// user 对象：
+//
+//	{"account_id":"01a17825504779df8447435613fb1617",
+//	 "principal_id":"01a1782550477a3a80ea7fe808b1eb9c",
+//	 "principal_urn":"iam::01a17825504779df8447435613fb1617:user:hw010922006740496"}
+//
+// 早期实现只认 user.{id,name,domain_id}，字段全空但 err 也是 nil，于是
+// 「补全账号信息」这一步静默失败 —— 浏览器登录导入的账号只能退回
+// `CodeArts <AK 短 id>` 这种看不出归属的名字，用户无法把账号和手机号对上。
+// 账号名取 urn 最后一段：IAM urn 形如 `iam::<domain>:user:<name>`，
+// 用户组形态是 `iam::<domain>:group:<name>`，所以按「最后一个冒号」切最稳。
+func parseCallerIdentity(out *callerIdentityResponse) (id, name, domainID string) {
+	id, domainID = out.PrincipalID, out.AccountID
+	if urn := out.PrincipalURN; urn != "" {
+		if i := strings.LastIndex(urn, ":"); i >= 0 {
+			name = urn[i+1:]
+		} else {
+			name = urn
+		}
+	}
+	if name == "" {
+		name = out.User.Name
+	}
+	if id == "" {
+		id = out.User.ID
+	}
+	if domainID == "" {
+		domainID = out.User.DomainID
+	}
+	return id, name, domainID
 }
 
 // --- PKCE / DPoP 生成 ---
