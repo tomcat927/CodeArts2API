@@ -404,7 +404,7 @@
     tb.textContent = "";
     var accts = d.accounts || [];
     if (!accts.length) {
-      tb.appendChild(emptyRow(10, "暂无账号，点击「导入本机 CodeArts Agent 登录态」或在下方手工录入"));
+      tb.appendChild(emptyRow(11, "暂无账号，点击「导入本机 CodeArts Agent 登录态」或在下方手工录入"));
       return;
     }
     accts.forEach(function(a){
@@ -447,6 +447,11 @@
       ops.appendChild(btn("重读", "xs", function(){ accountOp("reimport", {id:a.id}); }));
       ops.appendChild(btn("导出", "xs", function(){ exportSession(a.id); }));
       ops.appendChild(btn(a.enabled ? "停用" : "启用", "xs", function(){ accountOp("toggle", {id:a.id}); }));
+      ops.appendChild(btn("备注", "xs", function(){
+        var v = prompt("账号备注（如注册手机号）", a.note || "");
+        if (v === null) return;
+        accountOp("set-note", {id:a.id, note:v.trim()});
+      }));
       if (a.failures > 0) {
         ops.appendChild(btn("清错", "xs", function(){ accountOp("clear-errors", {id:a.id}); }));
       }
@@ -455,7 +460,8 @@
       }));
 
       var r = row([
-        cell(a.name), cell(a.source, "muted"), cell(a.access_key || "—", "mono"),
+        cell(a.name), cell(a.note || "—", a.note ? "" : "muted"), cell(a.source, "muted"),
+        cell(a.access_key || "—", "mono"),
         expCell, creditCell(a), statusCell, claimCell, cell(a.failures, "mono"),
         cell(fmtTime(a.last_used), "muted nowrap"), ops
       ]);
@@ -878,7 +884,7 @@
     if (!ak || !sk) { toast("请填写 Access Key 与 Secret Key", "err"); return; }
     var payload = {
       name: $("#manualName").value.trim(), access_key: ak, secret_key: sk,
-      credential_kind: kind
+      credential_kind: kind, note: $("#manualNote").value.trim()
     };
     if (kind !== "aksk") payload.security_token = $("#manualSTS").value.trim();
     return accountOp("manual", payload).then(function(){
@@ -888,7 +894,11 @@
   on("#addSession", function(){
     var js = $("#sessionJSON").value.trim();
     if (!js) { toast("请粘贴 session JSON", "err"); return; }
-    return accountOp("session-json", {name: $("#sessionName").value.trim(), session_json: js}).then(function(){
+    return accountOp("session-json", {
+      name: $("#sessionName").value.trim(),
+      note: $("#sessionNote").value.trim(),
+      session_json: js
+    }).then(function(){
       $("#sessionJSON").value = "";
     });
   });

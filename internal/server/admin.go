@@ -83,6 +83,8 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		SecurityToken string `json:"security_token"`
 		SessionJSON   string `json:"session_json"`
 		ExpiresAt     int64  `json:"expires_at"`
+		// Note 是用户备注（如账号所属手机号），仅供控制台展示，不参与调度。
+		Note string `json:"note"`
 		// CredentialKind 显式声明凭据形态：留空或 "sts" 走临时凭据，
 		// "aksk" 表示 IAM 永久 AK/SK（不过期、不续期、不带 security_token）。
 		CredentialKind string `json:"credential_kind"`
@@ -124,6 +126,7 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 				return
 			}
+			acct.Note = strings.TrimSpace(body.Note)
 			isNew := s.Store.UpsertAccount(acct)
 			s.Cred.Invalidate(acct.ID)
 			s.persist()
@@ -137,6 +140,7 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 			return
 		}
+		acct.Note = strings.TrimSpace(body.Note)
 		isNew := s.Store.UpsertAccount(acct)
 		s.Cred.Invalidate(acct.ID)
 		s.persist()
@@ -159,6 +163,7 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		acct := &codearts.Account{
 			ID: codearts.RandomHex(8), Name: name, Source: "manual",
 			Enabled: true, Status: "ok", Session: sess,
+			Note: strings.TrimSpace(body.Note),
 		}
 		isNew := s.Store.UpsertAccount(acct)
 		s.Cred.Invalidate(acct.ID)
@@ -184,6 +189,28 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 		if s.Store.ClearAccountErrors(body.ID) {
 			s.persist()
 		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+
+	case "set-note":
+		// 备注用于区分账号归属（如注册手机号），不影响调度与续期。
+		if !s.Store.SetAccountNote(body.ID, strings.TrimSpace(body.Note)) {
+			writeErr(w, http.StatusBadRequest, "账号不存在", "invalid_request_error")
+			return
+		}
+		s.persist()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+
+	case "rename":
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeErr(w, http.StatusBadRequest, "名称不能为空", "invalid_request_error")
+			return
+		}
+		if !s.Store.RenameAccount(body.ID, name) {
+			writeErr(w, http.StatusBadRequest, "账号不存在", "invalid_request_error")
+			return
+		}
+		s.persist()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 
 	case "export":

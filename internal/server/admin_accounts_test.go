@@ -181,3 +181,93 @@ func TestAdminWelfareFallsBackToNextAccount(t *testing.T) {
 		t.Errorf("应回退到账号 a，实际 %q", resp.ID)
 	}
 }
+
+// --- 账号备注 / 改名 ---
+
+// TestAdminAccountsSetNote 备注（如注册手机号）可写可改，并能在
+// /admin/api/state 里回读 —— 控制台靠它区分账号归属。
+func TestAdminAccountsSetNote(t *testing.T) {
+	s := newAdminTestServer(t, "a")
+
+	rec := adminProbeRequest(t, s, http.MethodPost, "/admin/api/accounts",
+		`{"action":"set-note","id":"a","note":" 13800000000 "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200（body: %s）", rec.Code, rec.Body.String())
+	}
+	if got := s.Store.Account("a"); got == nil || got.Note != "13800000000" {
+		t.Fatalf("备注未写入（应去掉首尾空白），实际 %+v", got)
+	}
+
+	rec = adminProbeRequest(t, s, http.MethodGet, "/admin/api/state", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("state 状态码 = %d，期望 200", rec.Code)
+	}
+	var state struct {
+		Accounts []struct {
+			ID   string `json:"id"`
+			Note string `json:"note"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Accounts) != 1 || state.Accounts[0].Note != "13800000000" {
+		t.Errorf("state 未返回备注: %+v", state.Accounts)
+	}
+
+	// 清空备注也要生效（手机号换绑后需要抹掉旧值）。
+	rec = adminProbeRequest(t, s, http.MethodPost, "/admin/api/accounts",
+		`{"action":"set-note","id":"a","note":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("清空备注状态码 = %d，期望 200", rec.Code)
+	}
+	if got := s.Store.Account("a"); got == nil || got.Note != "" {
+		t.Errorf("备注未清空: %+v", got)
+	}
+}
+
+// TestAdminAccountsSetNoteUnknownID 不存在的账号要报 400，而不是静默成功。
+func TestAdminAccountsSetNoteUnknownID(t *testing.T) {
+	s := newAdminTestServer(t, "a")
+	rec := adminProbeRequest(t, s, http.MethodPost, "/admin/api/accounts",
+		`{"action":"set-note","id":"nope","note":"138"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("状态码 = %d，期望 400（body: %s）", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAdminAccountsRename 改名生效，且空名被拒绝（否则列表会退化成 ID）。
+func TestAdminAccountsRename(t *testing.T) {
+	s := newAdminTestServer(t, "a")
+
+	rec := adminProbeRequest(t, s, http.MethodPost, "/admin/api/accounts",
+		`{"action":"rename","id":"a","name":" 手机号 138 "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200（body: %s）", rec.Code, rec.Body.String())
+	}
+	if got := s.Store.Account("a"); got == nil || got.Name != "手机号 138" {
+		t.Fatalf("改名未生效，实际 %+v", got)
+	}
+
+	rec = adminProbeRequest(t, s, http.MethodPost, "/admin/api/accounts",
+		`{"action":"rename","id":"a","name":"   "}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("空名应返回 400，实际 %d", rec.Code)
+	}
+}
+
+// TestAdminAccountsManualAcceptsNote 录入 / 导入账号时可一次填好备注。
+func TestAdminAccountsManualAcceptsNote(t *testing.T) {
+	s := newAdminTestServer(t)
+
+	rec := adminProbeRequest(t, s, http.MethodPost, "/admin/api/accounts",
+		`{"action":"manual","name":"m","access_key":"AKN","secret_key":"SKN",
+		  "credential_kind":"aksk","note":"13900000000"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200（body: %s）", rec.Code, rec.Body.String())
+	}
+	accts := s.Store.Accounts()
+	if len(accts) != 1 || accts[0].Note != "13900000000" {
+		t.Errorf("录入时带的备注丢了: %+v", accts)
+	}
+}

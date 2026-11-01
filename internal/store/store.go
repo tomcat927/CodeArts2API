@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -406,6 +407,10 @@ func (s *Store) UpsertAccount(a *codearts.Account) bool {
 			ex.Session.AccessKey != "" && ex.Session.AccessKey == a.Session.AccessKey
 		if sameDir || sameAK {
 			a.ID = ex.ID
+			// 备注由用户维护：重新导入同一账号的登录态时，不应把已有备注清空。
+			if a.Note == "" {
+				a.Note = ex.Note
+			}
 			s.st.Accounts[i] = cloneAccount(a)
 			return false
 		}
@@ -505,6 +510,9 @@ func (s *Store) SetAccountSession(id string, sess *codearts.Session) bool {
 }
 
 // MarkAccountResult 记录一次账号调用结果。
+//
+// 注意：note 只写入 LastErr / 清空，**永不覆盖 a.Note** —— Note 是用户设置的
+// 备注（如手机号），调用结果与之无关。
 func (s *Store) MarkAccountResult(id string, ok bool, note string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -517,9 +525,6 @@ func (s *Store) MarkAccountResult(id string, ok bool, note string) {
 			a.Failures = 0
 			a.Status = "ok"
 			a.LastErr = ""
-			if note != "" {
-				a.Note = note
-			}
 		} else {
 			a.Failures++
 			a.Status = "error"
@@ -527,6 +532,38 @@ func (s *Store) MarkAccountResult(id string, ok bool, note string) {
 		}
 		return
 	}
+}
+
+// SetAccountNote 设置账号的用户备注（如所属手机号）。返回账号是否存在。
+func (s *Store) SetAccountNote(id, note string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.st.Accounts {
+		if a.ID != id {
+			continue
+		}
+		a.Note = note
+		return true
+	}
+	return false
+}
+
+// RenameAccount 修改账号显示名。名字不能为空。返回账号是否存在。
+func (s *Store) RenameAccount(id, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.st.Accounts {
+		if a.ID != id {
+			continue
+		}
+		a.Name = name
+		return true
+	}
+	return false
 }
 
 // MarkClaimResult 记录一次每日签到结果。

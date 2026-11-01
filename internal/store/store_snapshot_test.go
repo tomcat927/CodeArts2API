@@ -57,6 +57,99 @@ func TestAccountSnapshotsAreIsolated(t *testing.T) {
 	}
 }
 
+// TestAccountNoteSurvivesMarkAccountResult 备注（如手机号）由用户维护，
+// 调用结果只能写 LastErr / Failures，不能覆盖 Note。
+//
+// 回归背景：MarkAccountResult 成功分支曾经在 note 非空时写 a.Note，
+// 把用户备注换成上游返回的提示语。
+func TestAccountNoteSurvivesMarkAccountResult(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.UpsertAccount(&codearts.Account{
+		ID: "a1", Name: "n1", Enabled: true, Status: "ok", Note: "13800000000",
+		Session: &codearts.Session{AccessKey: "ak1", SecretKey: "sk1"},
+	})
+
+	st.MarkAccountResult("a1", true, "conversation expired")
+	if got := st.Account("a1"); got.Note != "13800000000" {
+		t.Errorf("成功调用覆盖了备注: %q", got.Note)
+	}
+
+	st.MarkAccountResult("a1", false, "boom")
+	got := st.Account("a1")
+	if got.Note != "13800000000" {
+		t.Errorf("失败调用覆盖了备注: %q", got.Note)
+	}
+	if got.LastErr != "boom" {
+		t.Errorf("错误信息应写 LastErr，实际 %q", got.LastErr)
+	}
+}
+
+// TestSetAccountNoteAndRename 校验备注 / 改名的基本语义。
+func TestSetAccountNoteAndRename(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.UpsertAccount(&codearts.Account{ID: "a1", Name: "old", Enabled: true, Status: "ok"})
+
+	if !st.SetAccountNote("a1", "13900000000") {
+		t.Fatal("SetAccountNote 应返回 true")
+	}
+	if got := st.Account("a1"); got.Note != "13900000000" {
+		t.Errorf("备注 = %q，期望 13900000000", got.Note)
+	}
+	if st.SetAccountNote("missing", "x") {
+		t.Error("不存在的账号应返回 false")
+	}
+
+	if !st.RenameAccount("a1", " 新名字 ") {
+		t.Fatal("RenameAccount 应返回 true")
+	}
+	if got := st.Account("a1"); got.Name != "新名字" {
+		t.Errorf("名称 = %q，期望「新名字」（应去掉首尾空白）", got.Name)
+	}
+	if st.RenameAccount("a1", "   ") {
+		t.Error("空名应被拒绝")
+	}
+	if got := st.Account("a1"); got.Name != "新名字" {
+		t.Errorf("空名被拒后名称不该变化，实际 %q", got.Name)
+	}
+}
+
+// TestUpsertAccountPreservesNote 重新导入同一账号的登录态时，
+// 入参没带备注应保留原备注；显式带备注则覆盖。
+func TestUpsertAccountPreservesNote(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.UpsertAccount(&codearts.Account{
+		ID: "a1", Name: "n", Enabled: true, Status: "ok", Note: "13800000000",
+		Session: &codearts.Session{AccessKey: "AK1", SecretKey: "SK1"},
+	})
+
+	// 同一 AK 再次导入（模拟「导入本机登录态」），没带备注。
+	st.UpsertAccount(&codearts.Account{
+		ID: "a2", Name: "n", Enabled: true, Status: "ok",
+		Session: &codearts.Session{AccessKey: "AK1", SecretKey: "SK2"},
+	})
+	if got := st.Account("a1"); got == nil || got.Note != "13800000000" {
+		t.Errorf("重新导入清空了备注: %+v", got)
+	}
+
+	// 显式带备注时覆盖。
+	st.UpsertAccount(&codearts.Account{
+		ID: "a3", Name: "n", Enabled: true, Status: "ok", Note: "13900000000",
+		Session: &codearts.Session{AccessKey: "AK1", SecretKey: "SK3"},
+	})
+	if got := st.Account("a1"); got == nil || got.Note != "13900000000" {
+		t.Errorf("显式备注未覆盖: %+v", got)
+	}
+}
+
 // TestConcurrentAccountAccessIsSafe 并发跑「控制台读 + 请求路径写」，
 // 配合 -race 即可发现锁缺失（无 -race 时至少保证不死锁、不 panic）。
 func TestConcurrentAccountAccessIsSafe(t *testing.T) {

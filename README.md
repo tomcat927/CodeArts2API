@@ -455,7 +455,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 <http://127.0.0.1:10087/>，三个内嵌文件（HTML + CSS + JS）、无外部依赖、可离线使用。
 
 - **概览**：请求统计、今日领取 n/m、**活动福利列表与邀请链接（可按账号切换查看）**、模型清单（含积分倍率与**逐模型测活**）、一键刷新模型
-- **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / **导出 session JSON** / 探活 / **领取活动福利** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日领取」状态
+- **账号**：导入 / **浏览器登录** / 手工录入 / 从 session JSON 导入 / **导出 session JSON** / 探活 / **领取活动福利** / 重读 / 启停 / 删除，AK 与域 ID 脱敏展示，并显示「今日领取」状态；**备注**可记录账号所属手机号，方便换绑 / 重新登录时对号
 - **密钥**：签发 `sk-ca-...` 调用密钥（未签发时 `/v1/*` **仅允许本机直连**）
 - **日志**：只记元信息（模型、耗时、入出长度），不落对话内容
 - **设置**：默认 / 强制模型、**允许真实消耗积分开关**、**允许匿名调用开关**、**按密钥限流开关与阈值**、
@@ -485,7 +485,7 @@ DPAPI 只有 Windows 有，所以在 Linux / macOS / Docker 里无法自动读�
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/admin/api/state` | 首屏状态（账号 / 密钥 / 模型 / 设置 / 统计 / 今日领取） |
-| POST | `/admin/api/accounts` | 账号操作：`import` / `manual` / **`export`** / `session-json` / `remove` / `toggle` / `clear-errors` / `reimport` |
+| POST | `/admin/api/accounts` | 账号操作：`import` / `manual` / **`export`** / `session-json` / `remove` / `toggle` / `clear-errors` / `reimport` / **`set-note`** / **`rename`** |
 | GET/POST/DELETE | `/admin/api/keys` | API 密钥增删改查 |
 | GET/DELETE | `/admin/api/logs` `/admin/api/stats` | 请求日志与统计 |
 | GET/POST | `/admin/api/settings` | 运行设置 |
