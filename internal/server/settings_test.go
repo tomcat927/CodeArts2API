@@ -74,6 +74,20 @@ func TestAdminPasswordSetAndClear(t *testing.T) {
 	}
 }
 
+// TestSanitizedSettingsExposesCreditPriority 回归：新增设置必须同步加进
+// sanitizedSettings 白名单，否则 GET /admin/api/settings 缺字段，
+// 控制台回显成默认值，用户看不到真实状态。
+//
+// 回归背景：credit_priority 上线时漏加白名单，接口里读不到该字段。
+func TestSanitizedSettingsExposesCreditPriority(t *testing.T) {
+	st := store.DefaultSettings()
+	st.CreditPriority = false
+	out := sanitizedSettings(st)
+	if out["credit_priority"] != false {
+		t.Errorf("credit_priority = %v，期望 false（设置白名单漏了新字段）", out["credit_priority"])
+	}
+}
+
 // TestSanitizedSettingsHidesAdminPassword 下发给前端的设置里不能出现密码本体。
 func TestSanitizedSettingsHidesAdminPassword(t *testing.T) {
 	st := store.DefaultSettings()
