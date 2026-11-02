@@ -293,6 +293,12 @@ type Account struct {
 	LastClaimMsg  string `json:"last_claim_msg,omitempty"`
 	// 缓存的凭据（含 refresh_token 与 DPoP 私钥），用于 IDE 未运行时的续期
 	Session *Session `json:"session,omitempty"`
+
+	// 积分快照（后台刷新循环写入，供「到期积分优先」调度与控制台展示）。
+	// CreditRefreshedAt 为 0 表示从未刷新过；调度只信任 24h 内的快照。
+	CreditExpiring    float64 `json:"credit_expiring,omitempty"`
+	CreditResetDate   string  `json:"credit_reset_date,omitempty"`
+	CreditRefreshedAt int64   `json:"credit_refreshed_at,omitempty"`
 }
 
 // DisplayName 返回账号展示名。

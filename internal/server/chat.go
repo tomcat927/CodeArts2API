@@ -315,9 +315,12 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 		}
 		tried++
 		used = acct
+		// 在飞计数供 NextAccount 的「到期积分优先」跳过已打满并发上限的账号
+		s.Store.AcquireAccount(acct.ID)
 		cctx, cancel := context.WithTimeout(ctx, timeout)
 		err := fn(cctx, acct)
 		cancel()
+		s.Store.ReleaseAccount(acct.ID)
 
 		if err == nil {
 			s.Store.MarkAccountResult(acct.ID, true, "")

@@ -471,6 +471,16 @@
           </div>
 
           <div class="settings-group">
+            <h3>账号调度</h3>
+            <label class="check" for="sCreditPriority">
+              <input type="checkbox" id="sCreditPriority">
+              <span>到期积分优先调度
+                <span class="check-hint">积分快照显示有「即将到期」额度的健康账号会被优先调度，尽量在作废前把额度用掉；池内按到期额度降序轮询，在飞打满单账号并发上限（3）时溢出到其他账号。快照由后台每 10 分钟刷新，账号页的「到期优先」标识即数据来源。</span>
+              </span>
+            </label>
+          </div>
+
+          <div class="settings-group">
             <h3>访问控制</h3>
             <label class="check" for="sAllowAnonymous">
               <input type="checkbox" id="sAllowAnonymous">
