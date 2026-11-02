@@ -32,8 +32,8 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 			"claimed_today":  a.LastClaimDate == today,
 			// 积分快照的「即将到期」部分：控制台据此标「到期优先」；
 			// 完整额度（含进度条）走 /admin/api/credits 实时查
-			"credit_expiring":    a.CreditExpiring,
-			"credit_reset_date":  a.CreditResetDate,
+			"credit_expiring":     a.CreditExpiring,
+			"credit_reset_date":   a.CreditResetDate,
 			"credit_refreshed_at": a.CreditRefreshedAt,
 		}
 		if a.Session != nil {
