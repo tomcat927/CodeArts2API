@@ -26,7 +26,8 @@ func newScheduleStore(t *testing.T, n int) *Store {
 }
 
 // setCredit 直接改 store 内部账号的积分快照（测试专用）。
-func setCredit(st *Store, id string, expiring float64, refreshedAt int64) {
+func setCredit(t *testing.T, st *Store, id string, expiring float64, refreshedAt int64) {
+	t.Helper()
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	for _, a := range st.st.Accounts {
@@ -44,7 +45,7 @@ func setCredit(st *Store, id string, expiring float64, refreshedAt int64) {
 // 调度应只命中它，把额度在作废前用掉；没数据的账号照旧排在其后。
 func TestNextAccountPrefersExpiringCredits(t *testing.T) {
 	st := newScheduleStore(t, 2)
-	setCredit(st, "a", 3000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Unix())
 
 	for i := 0; i < 4; i++ {
 		if got := st.NextAccount(); got.ID != "a" {
@@ -57,8 +58,8 @@ func TestNextAccountPrefersExpiringCredits(t *testing.T) {
 // 而不是把流量压死在额度最大的一个上（单账号并发上限会被打满）。
 func TestNextAccountRotatesExpiringPool(t *testing.T) {
 	st := newScheduleStore(t, 3)
-	setCredit(st, "a", 3000, time.Now().Unix())
-	setCredit(st, "b", 1000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Unix())
+	setCredit(t, st, "b", 1000, time.Now().Unix())
 
 	want := []string{"a", "b", "a", "b"}
 	for i, id := range want {
@@ -72,8 +73,8 @@ func TestNextAccountRotatesExpiringPool(t *testing.T) {
 // 调度依据 —— 数据可能早就变了（额度用光 / 到期已过）。
 func TestNextAccountIgnoresStaleCreditSnapshot(t *testing.T) {
 	st := newScheduleStore(t, 2)
-	setCredit(st, "a", 3000, time.Now().Add(-25*time.Hour).Unix())
-	setCredit(st, "b", 3000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Add(-25*time.Hour).Unix())
+	setCredit(t, st, "b", 3000, time.Now().Unix())
 
 	for i := 0; i < 3; i++ {
 		if got := st.NextAccount(); got.ID != "b" {
@@ -85,7 +86,7 @@ func TestNextAccountIgnoresStaleCreditSnapshot(t *testing.T) {
 // TestNextAccountRespectsCreditPrioritySetting 关闭开关后即使快照新鲜也不改轮询。
 func TestNextAccountRespectsCreditPrioritySetting(t *testing.T) {
 	st := newScheduleStore(t, 2)
-	setCredit(st, "a", 3000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Unix())
 	st.UpdateSettings(func(s *Settings) { s.CreditPriority = false })
 
 	got := map[string]int{}
@@ -101,7 +102,7 @@ func TestNextAccountRespectsCreditPrioritySetting(t *testing.T) {
 // 否则「优先」会变成「优先撞墙」。
 func TestNextAccountSkipsFailingExpiringAccount(t *testing.T) {
 	st := newScheduleStore(t, 2)
-	setCredit(st, "a", 3000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Unix())
 	st.MarkAccountResult("a", false, "boom")
 
 	for i := 0; i < 2; i++ {
@@ -116,7 +117,7 @@ func TestNextAccountSkipsFailingExpiringAccount(t *testing.T) {
 // 普通轮询路径同样跳过打满的账号（溢出请求不能原路撞回到期账号）。
 func TestNextAccountSkipsBusyExpiringAccount(t *testing.T) {
 	st := newScheduleStore(t, 2)
-	setCredit(st, "a", 3000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Unix())
 
 	for i := 0; i < perAccountInFlight; i++ {
 		st.AcquireAccount("a")
@@ -135,7 +136,7 @@ func TestNextAccountSkipsBusyExpiringAccount(t *testing.T) {
 // TestNextAccountFallsBackWhenExpiringAccountDisabled 停用 / 删除后普通池照常工作。
 func TestNextAccountFallsBackWhenExpiringAccountDisabled(t *testing.T) {
 	st := newScheduleStore(t, 2)
-	setCredit(st, "a", 3000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Unix())
 	st.SetAccountEnabled("a", false)
 
 	for i := 0; i < 2; i++ {
@@ -148,7 +149,7 @@ func TestNextAccountFallsBackWhenExpiringAccountDisabled(t *testing.T) {
 // TestSetAccountCredit 写回快照的三元组；查询失败（info=nil）不动已有数据。
 func TestSetAccountCredit(t *testing.T) {
 	st := newScheduleStore(t, 1)
-	setCredit(st, "a", 3000, time.Now().Unix())
+	setCredit(t, st, "a", 3000, time.Now().Unix())
 
 	if st.SetAccountCredit("a", nil) {
 		t.Error("info=nil 应返回 false")
