@@ -9,6 +9,8 @@ import (
 )
 
 // newScheduleStore 建一个带 n 个启用账号的空状态 store。
+// 账号不带 Session：调度测试不需要凭据，也避免被 UpsertAccount 的
+// 「同 UserData / 同 AK 去重」合并成一个账号。
 func newScheduleStore(t *testing.T, n int) *Store {
 	t.Helper()
 	st, err := Open(filepath.Join(t.TempDir(), "state.json"))
@@ -19,7 +21,6 @@ func newScheduleStore(t *testing.T, n int) *Store {
 		st.UpsertAccount(&codearts.Account{
 			ID: string(rune('a' + i)), Name: string(rune('a' + i)),
 			Enabled: true, Status: "ok",
-			Session: &codearts.Session{AccessKey: "ak", SecretKey: "sk"},
 		})
 	}
 	return st
