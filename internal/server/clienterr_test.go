@@ -23,7 +23,7 @@ func clientRequestErr() error {
 func TestClientRequestErrorKeepsAccountHealthy(t *testing.T) {
 	s := newTestServer(t, 2, 3)
 
-	_, err := s.withAccountRetry(context.Background(), 5*time.Second,
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second,
 		func(context.Context, *codearts.Account) error {
 			return clientRequestErr()
 		})
@@ -50,7 +50,7 @@ func TestClientRequestErrorDoesNotRetryOtherAccounts(t *testing.T) {
 	s := newTestServer(t, 3, 3)
 
 	var attempts int
-	_, err := s.withAccountRetry(context.Background(), 5*time.Second,
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second,
 		func(context.Context, *codearts.Account) error {
 			attempts++
 			return clientRequestErr()
@@ -67,7 +67,7 @@ func TestClientRequestErrorDoesNotRetryOtherAccounts(t *testing.T) {
 func TestHardFailureStillMarksAccount(t *testing.T) {
 	s := newTestServer(t, 1, 2)
 
-	_, err := s.withAccountRetry(context.Background(), 5*time.Second,
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second,
 		func(context.Context, *codearts.Account) error {
 			return codearts.UpstreamBusinessError(401, "401: bad signature")
 		})
@@ -100,7 +100,7 @@ func multimodalMismatchErr() error {
 func TestMultimodalMismatchKeepsAccountHealthy(t *testing.T) {
 	s := newTestServer(t, 2, 3)
 
-	_, err := s.withAccountRetry(context.Background(), 5*time.Second,
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second,
 		func(context.Context, *codearts.Account) error {
 			return multimodalMismatchErr()
 		})
@@ -137,7 +137,7 @@ func TestContentModerationKeepsAccountHealthy(t *testing.T) {
 	s := newTestServer(t, 2, 3)
 
 	var attempts int
-	_, err := s.withAccountRetry(context.Background(), 5*time.Second,
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second,
 		func(context.Context, *codearts.Account) error {
 			attempts++
 			return moderationErr()

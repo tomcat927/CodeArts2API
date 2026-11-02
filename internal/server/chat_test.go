@@ -55,7 +55,7 @@ func TestWithAccountRetryBackoffWired(t *testing.T) {
 	t.Cleanup(func() { waitRetry = restore })
 
 	s := newTestServer(t, 1, 3)
-	_, err := s.withAccountRetry(t.Context(), 5*time.Second, func(context.Context, *codearts.Account) error {
+	_, _, err := s.withAccountRetry(t.Context(), 5*time.Second, func(context.Context, *codearts.Account) error {
 		return transientErr()
 	})
 	if err == nil {
@@ -86,7 +86,7 @@ func TestWithAccountRetryTransientThenSuccess(t *testing.T) {
 	s := newTestServer(t, 1, 3)
 
 	var attempts int
-	used, err := s.withAccountRetry(t.Context(), 5*time.Second, func(context.Context, *codearts.Account) error {
+	used, _, err := s.withAccountRetry(t.Context(), 5*time.Second, func(context.Context, *codearts.Account) error {
 		attempts++
 		if attempts == 1 {
 			return transientErr()

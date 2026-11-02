@@ -56,7 +56,7 @@ func TestWithAccountRetrySingleAccount(t *testing.T) {
 	s := newTestServer(t, 1, 2)
 
 	var attempts int32
-	_, err := s.withAccountRetry(context.Background(), 5*time.Second, func(context.Context, *codearts.Account) error {
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second, func(context.Context, *codearts.Account) error {
 		atomic.AddInt32(&attempts, 1)
 		return transientErr()
 	})
@@ -71,7 +71,7 @@ func TestWithAccountRetrySingleAccount(t *testing.T) {
 // TestWithAccountRetryTransientKeepsAccountHealthy 临时性故障不应把账号标记为故障。
 func TestWithAccountRetryTransientKeepsAccountHealthy(t *testing.T) {
 	s := newTestServer(t, 1, 2)
-	_, _ = s.withAccountRetry(context.Background(), 5*time.Second, func(context.Context, *codearts.Account) error {
+	_, _, _ = s.withAccountRetry(context.Background(), 5*time.Second, func(context.Context, *codearts.Account) error {
 		return transientErr()
 	})
 	acct := s.Store.Account("a")
@@ -89,7 +89,7 @@ func TestWithAccountRetryMarksHardFailure(t *testing.T) {
 	hard := errors.New("凭据无效")
 
 	var seen []string
-	_, err := s.withAccountRetry(context.Background(), 5*time.Second, func(_ context.Context, a *codearts.Account) error {
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second, func(_ context.Context, a *codearts.Account) error {
 		seen = append(seen, a.ID)
 		return hard
 	})
@@ -115,7 +115,7 @@ func TestWithAccountRetryMarksHardFailure(t *testing.T) {
 // TestWithAccountRetryNoAccounts 账号池为空时返回明确错误。
 func TestWithAccountRetryNoAccounts(t *testing.T) {
 	s := newTestServer(t, 0, 3)
-	_, err := s.withAccountRetry(context.Background(), time.Second, func(context.Context, *codearts.Account) error {
+	_, _, err := s.withAccountRetry(context.Background(), time.Second, func(context.Context, *codearts.Account) error {
 		t.Fatal("没有账号时不应调用 fn")
 		return nil
 	})
@@ -130,7 +130,7 @@ func TestWithAccountRetryClientCancelStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var attempts int32
-	_, err := s.withAccountRetry(ctx, 5*time.Second, func(context.Context, *codearts.Account) error {
+	_, _, err := s.withAccountRetry(ctx, 5*time.Second, func(context.Context, *codearts.Account) error {
 		atomic.AddInt32(&attempts, 1)
 		cancel() // 模拟客户端断开
 		return transientErr()

@@ -496,15 +496,31 @@
   function renderLogs(logs){
     var tb = $("#logs");
     tb.textContent = "";
-    if (!logs || !logs.length) { tb.appendChild(emptyRow(9, "暂无日志")); return; }
+    if (!logs || !logs.length) { tb.appendChild(emptyRow(10, "暂无日志")); return; }
+    // err_class → [中文标签, 颜色类]。审核/参数是请求侧错误（不污染账号）用 warn；
+    // 登录态/无账号/上游/内部属于需要介入的故障用 err；客户端中断是正常行为用 muted。
+    var clsMap = {
+      moderation:["审核","warn"], client_request:["参数","warn"],
+      credentials:["登录态","err"], no_account:["无账号","err"],
+      transient:["临时","warn"], rate_limited:["限流","warn"],
+      upstream:["上游","err"], client_abort:["中断","muted"], internal:["内部","err"]
+    };
     logs.forEach(function(l){
       var st = cell("");
       st.appendChild(pill(l.status, l.status >= 500 ? "err" : (l.status >= 400 ? "warn" : "ok")));
+      var cls = cell("");
+      if (l.err_class) {
+        var m = clsMap[l.err_class] || [l.err_class, "warn"];
+        cls.appendChild(pill(m[0], m[1]));
+      }
+      // attempts > 1 说明发生过换号重试，并入耗时列显示，避免再加一列。
+      var lat = l.latency_ms + "ms";
+      if (l.attempts > 1) lat += " · " + l.attempts + "次";
       var errCell = cell(l.err || "", "muted trunc");
       if (l.err) errCell.title = l.err;
       tb.appendChild(row([
         cell(fmtTime(l.time), "muted"), cell(l.model, "mono"), cell(l.stream ? "是" : "否", "mono"),
-        st, cell(l.latency_ms + "ms", "mono"), cell(l.prompt_len + " / " + l.output_len, "mono"),
+        st, cls, cell(lat, "mono"), cell(l.prompt_len + " / " + l.output_len, "mono"),
         cell(l.account, "mono"), cell(l.key, "mono"), errCell
       ]));
     });

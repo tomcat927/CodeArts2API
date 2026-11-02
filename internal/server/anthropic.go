@@ -89,7 +89,7 @@ func (s *Server) blockingAnthropic(w http.ResponseWriter, r *http.Request, body 
 		raw    []byte
 		outLen int
 	)
-	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
+	acct, tried, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
 		res, err := s.chatOnce(ctx, acct, model, body)
 		if err != nil {
 			return err
@@ -99,14 +99,14 @@ func (s *Server) blockingAnthropic(w http.ResponseWriter, r *http.Request, body 
 	})
 	if err != nil {
 		e := apierr.From(err)
-		s.record(key, acct, model.ID, false, e.Status, start, promptLen, 0, err)
+		s.record(key, acct, model.ID, false, e.Status, start, promptLen, 0, tried, err)
 		writeAnthropicErr(w, e.Status, e.Anthropic, err.Error())
 		return
 	}
 
 	out := protocol.FromOpenAI(raw, model.ID)
 	outLen = len([]rune(out.Text)) + len([]rune(out.Thinking))
-	s.record(key, acct, model.ID, false, http.StatusOK, start, promptLen, outLen, nil)
+	s.record(key, acct, model.ID, false, http.StatusOK, start, promptLen, outLen, tried, nil)
 	writeJSON(w, http.StatusOK, out.Payload)
 }
 
@@ -125,7 +125,7 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body []
 		streamErr error
 	)
 
-	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
+	acct, tried, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
 		st := newAnthropicStream(w, flusher, msgID, model.ID, promptLen)
 		err := s.streamOnce(ctx, acct, model, body, func(chunk []byte) error {
 			if !started {
@@ -156,7 +156,7 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body []
 		if err != nil {
 			msg = err.Error()
 		}
-		s.record(key, acct, model.ID, true, e.Status, start, promptLen, outLen, err)
+		s.record(key, acct, model.ID, true, e.Status, start, promptLen, outLen, tried, err)
 		writeAnthropicErr(w, e.Status, e.Anthropic, msg)
 		return
 	}
@@ -166,7 +166,7 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body []
 			"error": map[string]any{"type": apierr.From(streamErr).Anthropic, "message": streamErr.Error()},
 		})
 	}
-	s.record(key, acct, model.ID, true, apierr.From(streamErr).Status, start, promptLen, outLen, streamErr)
+	s.record(key, acct, model.ID, true, apierr.From(streamErr).Status, start, promptLen, outLen, tried, streamErr)
 }
 
 // --- OpenAI SSE → Anthropic SSE ---

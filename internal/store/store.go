@@ -96,6 +96,12 @@ type LogEntry struct {
 	PromptLen int    `json:"prompt_len"`
 	OutputLen int    `json:"output_len"`
 	Err       string `json:"err,omitempty"`
+	// ErrClass 是错误的分类标签（apierr.Classify 的结果），成功时为空。
+	// 让控制台能按「审核 / 参数 / 登录态 / 临时 / 上游」筛选，不必读错误原文。
+	ErrClass string `json:"err_class,omitempty"`
+	// Attempts 是本次请求实际尝试的账号数（含成功那次）。
+	// >1 说明发生过换号重试；请求侧错误（审核 / 参数）恒为 1。
+	Attempts int `json:"attempts,omitempty"`
 }
 
 // Stats 是累计统计。

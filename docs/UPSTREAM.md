@@ -280,23 +280,28 @@ body.model = "glm-5.3 "（尾随空格）
 
 ## 8. 错误码对照
 
-| 上游错误码 | 含义 | 网关处理 |
-| --- | --- | --- |
-| `TM.00001041` | 并发会话数已达上限（HTTP 400） | 按临时故障退避重试（**不计入账号失败**），仍失败则回 `429` |
-| `APIG.0301` / `APIG.0303` | 签名校验失败 / 凭据失效 | 翻译成「登录态失效，请重新登录」→ `502 credentials_error` |
-| `STS5.1804` | refresh_token 已过期 | 同上 |
-| `STS5.1806` | refresh_token 已被使用（单次 + 轮转） | 同上；提示「IDE 与网关同时续期会互相作废」 |
-| `invalid_grant` | refresh_token 失效 | 同上 |
-| `4005` | 该通道不支持此模型 | `400 invalid_request_error`（`statusFromCode` 兜底） |
-| `InferHub.001001005.400` | 请求参数越界（`temperature` / `max_tokens` / tools 超长等） | `400 invalid_request_error`；**不计账号故障、不换号重试** |
-| `InferHub.001001011.406` | 模型名与 `model-id` 不一致 | `400 invalid_request_error` |
-| `InferHub.001001020.406` | 请求模型不支持多模态（给纯文本模型发图片），HTTP 406 | `400 invalid_request_error`；**不计账号故障、不换号重试** |
-| `ModelArts.81011` | 输入内容命中审核（实测 HTTP 403，`Input image May contain sensitive information`；纯文本被拒时只回模板话术、不带业务码） | `400 invalid_request_error`；**不计账号故障、不换号重试**（换号同样被拒，只会白烧积分） |
-| `InferHub.002002009.404` | 复合码，末段是真实状态码 | 按末段映射（此处 `404`） |
-| `TM.00001027` | 未通过学生认证（education 通道） | `400`（普通账号不应命中） |
+| 上游错误码 | 含义 | 网关处理 | 日志分类（`err_class`） |
+| --- | --- | --- | --- |
+| `TM.00001041` | 并发会话数已达上限（HTTP 400） | 按临时故障退避重试（**不计入账号失败**），仍失败则回 `429` | `transient` |
+| `APIG.0301` / `APIG.0303` | 签名校验失败 / 凭据失效 | 翻译成「登录态失效，请重新登录」→ `502 credentials_error` | `credentials` |
+| `STS5.1804` | refresh_token 已过期 | 同上 | `credentials` |
+| `STS5.1806` | refresh_token 已被使用（单次 + 轮转） | 同上；提示「IDE 与网关同时续期会互相作废」 | `credentials` |
+| `invalid_grant` | refresh_token 失效 | 同上 | `credentials` |
+| `4005` | 该通道不支持此模型 | `400 invalid_request_error`（`statusFromCode` 兜底） | `client_request` |
+| `InferHub.001001005.400` | 请求参数越界（`temperature` / `max_tokens` / tools 超长等） | `400 invalid_request_error`；**不计账号故障、不换号重试** | `client_request` |
+| `InferHub.001001011.406` | 模型名与 `model-id` 不一致 | `400 invalid_request_error` | `client_request` |
+| `InferHub.001001020.406` | 请求模型不支持多模态（给纯文本模型发图片），HTTP 406 | `400 invalid_request_error`；**不计账号故障、不换号重试** | `client_request` |
+| `ModelArts.81011` | 输入内容命中审核（实测 HTTP 403，`Input image May contain sensitive information`；纯文本被拒时只回模板话术、不带业务码） | `400 invalid_request_error`；**不计账号故障、不换号重试**（换号同样被拒，只会白烧积分） | `moderation` |
+| `InferHub.002002009.404` | 复合码，末段是真实状态码 | 按末段映射（此处 `404`） | `upstream` |
+| `TM.00001027` | 未通过学生认证（education 通道） | `400`（普通账号不应命中） | `client_request` |
 
 > 上面 `APIG.*` / `STS5.*` / `invalid_grant` 即使以 **HTTP 400** 返回，也必须计入账号故障：
 > `IsClientRequestError` 里有 `credentialCodes` 排除表，不能只看状态码是不是 4xx。
+>
+> 「日志分类」是 `apierr.Classify` 的返回值（v0.1.4 起写入每条请求日志），
+> 控制台「日志」页按此筛选。判定顺序是「子集先于父集」：
+> `moderation` / `transient` 都可能落在 HTTP 400~403 上，必须先于 `client_request` 判定，
+> 否则审核拒绝与并发上限会被错记成普通「参数错误」。
 
 **凭据失效是唯一需要人工介入的错误**，网关会明确提示「请重新登录 CodeArts Agent」，
 并刻意**不**报成 `overloaded_error`，避免客户端无限重试。

@@ -92,7 +92,7 @@ func (s *Server) blockingChat(w http.ResponseWriter, r *http.Request, body []byt
 		outLen int
 	)
 
-	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
+	acct, tried, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
 		res, err := s.chatOnce(ctx, acct, model, body)
 		if err != nil {
 			return err
@@ -102,13 +102,13 @@ func (s *Server) blockingChat(w http.ResponseWriter, r *http.Request, body []byt
 	})
 	if err != nil {
 		e := apierr.From(err)
-		s.record(key, acct, model.ID, false, e.Status, start, promptLen, 0, err)
+		s.record(key, acct, model.ID, false, e.Status, start, promptLen, 0, tried, err)
 		writeErr(w, e.Status, err.Error(), e.OpenAI)
 		return
 	}
 
 	outLen = completionLen(raw)
-	s.record(key, acct, model.ID, false, http.StatusOK, start, promptLen, outLen, nil)
+	s.record(key, acct, model.ID, false, http.StatusOK, start, promptLen, outLen, tried, nil)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -130,7 +130,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 		streamErr error
 	)
 
-	acct, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
+	acct, tried, err := s.withAccountRetry(r.Context(), timeout, func(ctx context.Context, acct *codearts.Account) error {
 		return s.streamOnce(ctx, acct, model, body, func(chunk []byte) error {
 			if !started {
 				h := w.Header()
@@ -159,7 +159,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 		if err != nil {
 			msg = err.Error()
 		}
-		s.record(key, acct, model.ID, true, e.Status, start, promptLen, outLen, err)
+		s.record(key, acct, model.ID, true, e.Status, start, promptLen, outLen, tried, err)
 		writeErr(w, e.Status, msg, e.OpenAI)
 		return
 	}
@@ -179,7 +179,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, body []byte,
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	flusher.Flush()
 
-	s.record(key, acct, model.ID, true, apierr.From(streamErr).Status, start, promptLen, outLen, streamErr)
+	s.record(key, acct, model.ID, true, apierr.From(streamErr).Status, start, promptLen, outLen, tried, streamErr)
 }
 
 // chatOnce 用指定账号发一次非流式请求。
@@ -289,11 +289,12 @@ var waitRetry = func(ctx context.Context, d time.Duration) error {
 
 // withAccountRetry 选账号并在失败时重试。
 //
-// 返回本次实际使用的账号（可能为 nil），供调用方记录日志归属。
-func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn func(context.Context, *codearts.Account) error) (*codearts.Account, error) {
+// 返回本次实际使用的账号（可能为 nil）、实际尝试的账号数（供日志记录）、错误。
+// tried 让控制台能看出「一次成功」与「重试 N 次后失败」的区别 —— 请求侧错误恒为 1。
+func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn func(context.Context, *codearts.Account) error) (*codearts.Account, int, error) {
 	accts := s.Store.Accounts()
 	if len(accts) == 0 {
-		return nil, apierr.NoAccount
+		return nil, 0, apierr.NoAccount
 	}
 	attempts := s.Store.Settings().MaxRetries
 	if attempts <= 0 {
@@ -306,11 +307,13 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 	var lastErr error
 	var used *codearts.Account
 	transientWaits := 0
+	tried := 0
 	for i := 0; i < attempts; i++ {
 		acct := s.Store.NextAccount()
 		if acct == nil {
 			break
 		}
+		tried++
 		used = acct
 		cctx, cancel := context.WithTimeout(ctx, timeout)
 		err := fn(cctx, acct)
@@ -318,7 +321,7 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 
 		if err == nil {
 			s.Store.MarkAccountResult(acct.ID, true, "")
-			return acct, nil
+			return acct, tried, nil
 		}
 		lastErr = err
 		// 客户端主动断开（curl/浏览器提前关连接）不是账号故障，不应计入失败
@@ -332,7 +335,7 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 			}
 			transientWaits++
 			if err := waitRetry(ctx, transientBackoff(transientWaits)); err != nil {
-				return used, lastErr
+				return used, tried, lastErr
 			}
 			continue
 		}
@@ -340,14 +343,14 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 		// 不是账号故障。计入失败会让任意客户端发错一次参数就把健康账号标成 error，
 		// 还会累加 failures 触发熔断。直接返回，让客户端去改请求。
 		if codearts.IsClientRequestError(err) {
-			return used, lastErr
+			return used, tried, lastErr
 		}
 		s.Store.MarkAccountResult(acct.ID, false, err.Error())
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("全部账号均不可用")
 	}
-	return used, lastErr
+	return used, tried, lastErr
 }
 
 // rewriteModel 把请求体里的 model 换成解析后的上游模型 ID。
@@ -386,7 +389,10 @@ func rewriteStream(body []byte, stream bool) ([]byte, error) {
 }
 
 // record 记录一次请求结果。
-func (s *Server) record(key string, acct *codearts.Account, model string, stream bool, status int, start time.Time, inLen, outLen int, err error) {
+// attempts 是本次请求实际尝试的账号数（withAccountRetry 的返回值），
+// 让日志能区分「一次成功」与「重试 N 次后失败」；ErrClass 由 apierr.Classify 推导，
+// 控制台据此按「审核 / 参数 / 登录态 / 临时 / 上游」筛选，不必读错误原文。
+func (s *Server) record(key string, acct *codearts.Account, model string, stream bool, status int, start time.Time, inLen, outLen, attempts int, err error) {
 	e := store.LogEntry{
 		Time:      time.Now().Unix(),
 		Key:       codearts.Mask(key),
@@ -403,6 +409,8 @@ func (s *Server) record(key string, acct *codearts.Account, model string, stream
 	if err != nil {
 		e.Err = err.Error()
 	}
+	e.ErrClass = apierr.Classify(err)
+	e.Attempts = attempts
 	s.Store.Record(e, outLen)
 }
 
