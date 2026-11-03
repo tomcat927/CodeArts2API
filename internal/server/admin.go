@@ -31,6 +31,11 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 			"last_claim_err": a.LastClaimErr,
 			"last_claim_msg": a.LastClaimMsg,
 			"claimed_today":  a.LastClaimDate == today,
+			// 积分快照的「即将到期」部分：控制台据此标「到期优先」；
+			// 完整额度（含进度条）走 /admin/api/credits 实时查
+			"credit_expiring":     a.CreditExpiring,
+			"credit_reset_date":   a.CreditResetDate,
+			"credit_refreshed_at": a.CreditRefreshedAt,
 		}
 		if a.Session != nil {
 			row["access_key"] = codearts.Mask(a.Session.AccessKey)
@@ -340,6 +345,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		AutoRefresh       *bool             `json:"auto_refresh"`
 		AllowCreditModels *bool             `json:"allow_credit_models"`
 		AllowAnonymous    *bool             `json:"allow_anonymous"`
+		CreditPriority    *bool             `json:"credit_priority"`
 		RateLimitEnabled  *bool             `json:"rate_limit_enabled"`
 		RateLimitQPS      *int              `json:"rate_limit_qps"`
 		RateLimitBurst    *int              `json:"rate_limit_burst"`
@@ -371,6 +377,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		setIf(&st.AutoRefresh, body.AutoRefresh)
 		setIf(&st.AllowCreditModels, body.AllowCreditModels)
 		setIf(&st.AllowAnonymous, body.AllowAnonymous)
+		setIf(&st.CreditPriority, body.CreditPriority)
 		setIf(&st.RateLimitEnabled, body.RateLimitEnabled)
 		setIf(&st.RateLimitQPS, body.RateLimitQPS)
 		setIf(&st.RateLimitBurst, body.RateLimitBurst)

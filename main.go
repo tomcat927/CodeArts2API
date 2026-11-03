@@ -101,10 +101,11 @@ func main() {
 	srv := server.New(st)
 	srv.ApplyIdentity()
 
-	// 后台每日自动领取运营活动福利
-	claimCtx, stopClaim := context.WithCancel(context.Background())
-	defer stopClaim()
-	srv.StartClaimLoop(claimCtx)
+	// 后台任务：每日自动领取运营活动福利 + 积分快照刷新（供「到期积分优先」调度）
+	bgCtx, stopBG := context.WithCancel(context.Background())
+	defer stopBG()
+	srv.StartClaimLoop(bgCtx)
+	srv.StartCreditLoop(bgCtx)
 
 	// 后台刷新一次模型清单（不阻塞启动）
 	go func() {

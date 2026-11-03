@@ -212,7 +212,10 @@ curl ... -d '{"model":"glm-5.3","messages":[...],"stream":true}'  # 原生流式
 **临时性故障**：退避后重试、并且**不会**把账号标记为不可用 ——
 否则一次并发打满就会让健康账号被熔断。
 
-> 如果你要跑高并发，建议在控制台多导入几个账号，网关会自动轮询并在失败时换号。
+> 如果你要跑高并发，建议在控制台多导入几个账号。网关默认开启**到期积分优先调度**
+> （设置 → 账号调度，可关）：积分快照显示有「即将到期」额度的健康账号先被调度，
+> 尽量在作废前把额度用掉，其余账号按轮询换号；单账号在飞打满并发上限（3）时
+> 溢出到其他账号。快照由后台每 10 分钟刷新一次，关闭开关即恢复纯轮询。
 
 ### 2.4 模型别名
 
@@ -573,6 +576,7 @@ CodeArts2API/
 │  ├─ server/            # OpenAI / Anthropic 兼容层 + 控制台
 │  │  ├─ chat.go  anthropic.go  models.go  model_resolve.go
 │  │  ├─ claim.go              # 每日自动领取活动福利调度
+│  │  ├─ creditloop.go         # 积分快照后台刷新（供「到期积分优先」调度）
 │  │  ├─ login.go              # 浏览器登录 API
 │  │  ├─ metrics.go            # /metrics（Prometheus 文本，复用现有统计）
 │  │  ├─ admin.go  server.go  web.go
@@ -595,6 +599,13 @@ CodeArts2API/
 ---
 
 ## 七、开发与自检
+
+**仓库规约：验证以 GitHub Actions 为准，不要为本仓库在本机安装 Go 工具链。**
+本项目的开发机（Windows）不装本地编译环境；改动完成后直接提交推送，
+由 [ci.yml](.github/workflows/ci.yml) 在 Linux + Windows 两个矩阵上跑
+gofmt / go vet / go test / -race / 控制台 JS+CSS 检查 / 构建，
+推送后到 GitHub Actions 页面（或 `gh run watch`）确认绿灯即可。
+下文的本地命令供已有 Go 环境的环境（容器 / CI 调试）参考。
 
 ```bash
 # 一条命令跑完提交前检查（vet + 跨平台 vet + test + 控制台 JS/CSS）

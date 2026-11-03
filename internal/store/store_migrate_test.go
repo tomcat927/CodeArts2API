@@ -42,6 +42,45 @@ func TestOpenMigratesLegacyFile(t *testing.T) {
 	}
 }
 
+// TestOpenMigratesV1SetsCreditPriority v1 → v2：CreditPriority 是后加的 bool 开关，
+// 老文件缺字段会被 unmarshal 成零值 false（关闭），迁移必须显式置真 ——
+// 否则升级一次，所有存量部署的「到期积分优先」都静默变成关闭。
+// v2 文件里用户显式关闭的值不能被迁移覆盖。
+func TestOpenMigratesV1SetsCreditPriority(t *testing.T) {
+	t.Run("v1 文件迁移后默认开启", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "v1.json")
+		v1 := `{"version":1,"accounts":[],"keys":[],"settings":{},"stats":{},"logs":[]}`
+		if err := os.WriteFile(path, []byte(v1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open v1 文件失败: %v", err)
+		}
+		if !st.Settings().CreditPriority {
+			t.Error("v1 迁移后 CreditPriority 应默认开启")
+		}
+		if st.st.Version != StateVersion {
+			t.Errorf("迁移后 Version = %d，期望 %d", st.st.Version, StateVersion)
+		}
+	})
+
+	t.Run("v2 显式关闭保持关闭", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "v2.json")
+		v2 := `{"version":2,"accounts":[],"keys":[],"settings":{"credit_priority":false},"stats":{},"logs":[]}`
+		if err := os.WriteFile(path, []byte(v2), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open v2 文件失败: %v", err)
+		}
+		if st.Settings().CreditPriority {
+			t.Error("v2 显式关闭的 CreditPriority 不应被覆盖")
+		}
+	})
+}
+
 // TestOpenRejectsFutureVersion 版本高于本程序时必须报错：
 // 否则旧程序会把不认识的字段静默丢掉，再落盘就造成数据损坏。
 func TestOpenRejectsFutureVersion(t *testing.T) {

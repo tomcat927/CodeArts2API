@@ -427,6 +427,12 @@
       }
       if (a.has_refresh) statusCell.appendChild(document.createTextNode(" "));
       if (a.has_refresh) statusCell.appendChild(pill("可续期", "ok"));
+      if (a.enabled && a.credit_expiring > 0) {
+        var cp = pill("到期优先", "ok");
+        cp.title = "积分快照显示有 " + a.credit_expiring + " 积分即将到期（重置 " + (a.credit_reset_date || "—") + "）；开启「到期积分优先调度」时该账号会被优先调度";
+        statusCell.appendChild(document.createTextNode(" "));
+        statusCell.appendChild(cp);
+      }
 
       var expCell = cell("", "cell-stack");
       if (a.permanent) {
@@ -552,6 +558,7 @@
     $("#sUserData").value = s.user_data_dir || "";
     $("#sLoginPort").value = s.login_port || 0;
     $("#sAllowCredit").checked = !!s.allow_credit_models;
+    $("#sCreditPriority").checked = (s.credit_priority === undefined ? true : !!s.credit_priority);
     $("#sAllowAnonymous").checked = !!s.allow_anonymous;
     $("#sRateLimit").checked = !!s.rate_limit_enabled;
     $("#sRateQPS").value = s.rate_limit_qps || "";
@@ -1063,6 +1070,7 @@
       user_data_dir: $("#sUserData").value.trim(),
       login_port: parseInt($("#sLoginPort").value, 10) || 0,
       allow_credit_models: $("#sAllowCredit").checked,
+      credit_priority: $("#sCreditPriority").checked,
       allow_anonymous: $("#sAllowAnonymous").checked,
       rate_limit_enabled: $("#sRateLimit").checked,
       rate_limit_qps: parseInt($("#sRateQPS").value, 10) || 0,

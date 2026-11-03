@@ -457,6 +457,7 @@ func sanitizedSettings(st store.Settings) map[string]any {
 		"rate_limit_burst":       st.RateLimitBurst,
 		"rate_limit_concurrency": st.RateLimitConcurrency,
 		"auto_claim":             st.AutoClaim,
+		"credit_priority":        st.CreditPriority,
 		"claim_after_hour":       st.ClaimAfterHour,
 		"claim_after_minute":     st.ClaimAfterMinute,
 		"write_back_to_ide":      st.WriteBackToIDE,

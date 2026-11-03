@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,9 @@ type Settings struct {
 	RateLimitConcurrency int `json:"rate_limit_concurrency"`
 	// AutoClaim 每天自动领取运营活动福利（幂等，重复领不报错）。
 	AutoClaim bool `json:"auto_claim"`
+	// CreditPriority 开启「到期积分优先」调度：积分快照显示即将到期额度 > 0
+	// 的健康账号先于其他账号被调度，尽量在其到期前把额度用掉。默认开启。
+	CreditPriority bool `json:"credit_priority"`
 	// ClaimAfterHour / ClaimAfterMinute 是每天开始领取的本地时刻。
 	// 运营活动的权益按自然日刷新，所以默认 00:05 领。
 	ClaimAfterHour   int `json:"claim_after_hour"`
@@ -117,7 +121,10 @@ type Stats struct {
 // 0 表示「加版本号之前的历史文件」。对 State 结构做不兼容改动时 +1，
 // 并在 migrate 里补一段从旧版本升级的逻辑。Open 会拒绝读取版本高于
 // 本程序的文件 —— 否则新版本写的字段会被旧程序静默丢弃。
-const StateVersion = 1
+//
+// v1 → v2：新增 Settings.CreditPriority。bool 零值是 false，老文件缺字段
+// 会被 unmarshal 成「关闭」，所以在迁移里显式置真 —— 该功能默认开启。
+const StateVersion = 2
 
 // State 是全部持久化状态。
 type State struct {
@@ -144,6 +151,12 @@ type Store struct {
 	path   string
 	st     *State
 	rotate int
+	// rotateCredit 是「到期积分池」独立的轮询下标，与普通池的 rotate 互不干扰
+	// （到期池非空时普通池可以被饿着 —— 这正是该策略的目的）。
+	rotateCredit int
+	// inFlight 是各账号当前在飞的请求数，由请求路径 Acquire/Release 维护。
+	// 只用于调度决策，不持久化 —— 进程重启后归零，重新累计。
+	inFlight map[string]int
 }
 
 // DefaultSettings 返回默认设置。
@@ -165,6 +178,7 @@ func DefaultSettings() Settings {
 		RateLimitBurst:       10,
 		RateLimitConcurrency: 8,
 		AutoClaim:            true,
+		CreditPriority:       true,
 		ClaimAfterHour:       0,
 		ClaimAfterMinute:     5,
 		WriteBackToIDE:       true,
@@ -215,6 +229,9 @@ func (s *Store) migrate() error {
 		switch s.st.Version {
 		case 0:
 			s.st.Version = 1
+		case 1:
+			s.st.Settings.CreditPriority = true
+			s.st.Version = 2
 		default:
 			return fmt.Errorf("状态文件版本 %d 无法迁移", s.st.Version)
 		}
@@ -438,14 +455,29 @@ func (s *Store) RemoveAccount(id string) bool {
 	return false
 }
 
-// NextAccount 以轮询方式挑一个可用账号，返回快照。
+// creditFreshTTL 是积分快照参与调度的可信时长。
 //
-// 选择规则（v0.1.5 起）：
-//   - 跳过停用账号与**冷却中**的账号（冷却来自上一次失败，见 failureCooldown）；
-//   - 其余账号严格轮询：健康账号与「冷却刚结束、等待半开探测」的账号同等参与。
-//     v0.1.4 及之前只要存在 Failures==0 的账号就直接返回它，导致一次网络抖动
-//     标成 error 的账号永远轮不到，等于永久损失容量（8 个账号只剩 5 个在转）。
-//   - 全部都在冷却中时兜底返回失败最少的账号，保证不会硬阻塞请求。
+// 快照由后台循环每 10 分钟刷新一次；超过该时长没刷成功（凭据失效、上游故障、
+// 服务刚启动还没刷到）的账号不做「到期优先」，退回普通轮询。
+const creditFreshTTL = 24 * time.Hour
+
+// perAccountInFlight 是单个账号允许的并发会话数（上游约束）。
+//
+// 到期优先会把流量集中到少数账号，超过这个数上游直接回 TM.00001041
+// （临时性错误）；选号时跳过已打满的账号，让溢出的请求落到其他账号。
+const perAccountInFlight = 3
+
+// NextAccount 挑一个可用账号，返回快照。
+//
+// 调度顺序：
+//  1. CreditPriority 开启时，「积分快照（24h 内）显示即将到期额度 > 0」的健康账号
+//     先行 —— 目标是在额度过期作废前把它用掉。
+//  2. 其余账号轮询：跳过停用与**冷却中**的账号（冷却来自上一次失败，见
+//     failureCooldown）。健康账号与「冷却刚结束、等待半开探测」的账号同等参与 ——
+//     v0.1.4 及之前只要存在 Failures==0 的账号就直接返回它，于是一次网络抖动被标成
+//     error 的账号永远轮不到，等于永久损失容量（2026-11-03 事故：8 个账号只剩 5 个在转）。
+//     在飞已打满单账号并发上限的账号会让位给下一个候选，避免撞上游 TM.00001041。
+//  3. 全部都在冷却中时兜底返回失败最少的账号，保证不会硬阻塞请求。
 func (s *Store) NextAccount() *codearts.Account {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -453,8 +485,16 @@ func (s *Store) NextAccount() *codearts.Account {
 	if n == 0 {
 		return nil
 	}
+	if s.st.Settings.CreditPriority {
+		if a := s.nextExpiringAccount(); a != nil {
+			return a
+		}
+	}
 	now := time.Now().Unix()
-	var fallback *codearts.Account
+	// fallback 允许是冷却中的账号：全部冷却时宁可试一次也不硬阻塞。
+	// free / healthy 只在「未冷却」的账号里挑，分别表示未打满与任意可用。
+	var fallback, free, healthy *codearts.Account
+	freeIdx, healthyIdx := 0, 0
 	for i := 0; i < n; i++ {
 		idx := (s.rotate + i) % n
 		a := s.st.Accounts[idx]
@@ -467,10 +507,81 @@ func (s *Store) NextAccount() *codearts.Account {
 		if a.CooldownUntil > now {
 			continue
 		}
-		s.rotate = (idx + 1) % n
-		return cloneAccount(a)
+		if healthy == nil {
+			healthy, healthyIdx = a, idx
+		}
+		if free == nil && s.inFlight[a.ID] < perAccountInFlight {
+			free, freeIdx = a, idx
+		}
+	}
+	if free != nil {
+		s.rotate = (freeIdx + 1) % n
+		return cloneAccount(free)
+	}
+	if healthy != nil {
+		s.rotate = (healthyIdx + 1) % n
+		return cloneAccount(healthy)
 	}
 	return cloneAccount(fallback)
+}
+
+// nextExpiringAccount 从「到期积分池」挑号，池空时返回 nil（调用方回退普通轮询）。
+// 必须在持有 s.mu 时调用。
+func (s *Store) nextExpiringAccount() *codearts.Account {
+	now := time.Now()
+	pool := make([]*codearts.Account, 0, len(s.st.Accounts))
+	for _, a := range s.st.Accounts {
+		if !a.Enabled || a.Failures != 0 {
+			continue
+		}
+		// 冷却中的账号连「到期积分池」也不能进：失败后的半开探测由普通轮询负责，
+		// 否则到期优先会把刚失败的账号立刻重新打满流量。
+		if a.CooldownUntil > now.Unix() {
+			continue
+		}
+		if a.CreditExpiring <= 0 || a.CreditRefreshedAt <= 0 ||
+			now.Sub(time.Unix(a.CreditRefreshedAt, 0)) > creditFreshTTL {
+			continue
+		}
+		if s.inFlight[a.ID] >= perAccountInFlight {
+			continue
+		}
+		pool = append(pool, a)
+	}
+	if len(pool) == 0 {
+		return nil
+	}
+	// 到期额度大的先用；稳定排序保证额度相同时按账号清单顺序，结果可复现。
+	sort.SliceStable(pool, func(i, j int) bool {
+		return pool[i].CreditExpiring > pool[j].CreditExpiring
+	})
+	a := pool[s.rotateCredit%len(pool)]
+	s.rotateCredit = (s.rotateCredit + 1) % len(pool)
+	return cloneAccount(a)
+}
+
+// AcquireAccount 标记账号上的一次调用开始（在飞计数 +1）。
+//
+// 只有请求路径（withAccountRetry）需要计数 —— 它是并发流量的来源；
+// 控制台的一次性查询短暂借用会话，不计入。
+func (s *Store) AcquireAccount(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inFlight == nil {
+		s.inFlight = map[string]int{}
+	}
+	s.inFlight[id]++
+}
+
+// ReleaseAccount 标记账号上的一次调用结束。
+func (s *Store) ReleaseAccount(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n := s.inFlight[id]; n <= 1 {
+		delete(s.inFlight, id)
+	} else {
+		s.inFlight[id] = n - 1
+	}
 }
 
 // SetAccountEnabled 启用 / 停用账号（在锁内修改，避免与控制台读取竞争）。
@@ -623,6 +734,28 @@ func (s *Store) MarkClaimResult(id, date string, ok bool, msg string) {
 		}
 		return
 	}
+}
+
+// SetAccountCredit 写回账号的积分快照（后台刷新循环调用）。
+//
+// info 为 nil（本次查询失败）时不改动已有快照 —— 失败只是「这次没刷到」，
+// 不代表到期积分消失了；快照的 24h 可信期会自然处理陈旧数据。
+func (s *Store) SetAccountCredit(id string, info *codearts.CreditInfo) bool {
+	if info == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.st.Accounts {
+		if a.ID != id {
+			continue
+		}
+		a.CreditExpiring = info.Expiring
+		a.CreditResetDate = info.ResetDate
+		a.CreditRefreshedAt = time.Now().Unix()
+		return true
+	}
+	return false
 }
 
 // --- 密钥 ---
