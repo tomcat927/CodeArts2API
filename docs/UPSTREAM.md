@@ -303,6 +303,26 @@ body.model = "glm-5.3 "（尾随空格）
 > `moderation` / `transient` 都可能落在 HTTP 400~403 上，必须先于 `client_request` 判定，
 > 否则审核拒绝与并发上限会被错记成普通「参数错误」。
 
+### 8.1 网络层错误（无上游错误码）
+
+有一类失败**没有** `error_code`，只有传输层错误：
+
+| 错误原文 | 含义 | 网关切分 |
+| --- | --- | --- |
+| `unexpected EOF` | 上游在响应中途断开连接 | `network`，退避后换号重试，**不计账号故障** |
+| `context deadline exceeded` | 单次请求超时（父上下文仍存活） | 同上 |
+| `context canceled` | 客户端主动断开 | `client_abort`，不重试、不计故障 |
+
+这些错误既不是 `UpstreamError`（没有业务码），也不该算请求非法。
+v0.1.4 及之前它们落到「其余失败」分支被 `MarkAccountResult(false)`，
+一次抖动就把健康账号标成 `error`，而 `NextAccount` 又只挑 `Failures==0` 的账号 ——
+等于永久损失容量。v0.1.5 增加 `codearts.IsTransientNetwork`：
+
+- `withAccountRetry` 里先于 `MarkAccountResult` 判定，退避后换号重试；
+- `apierr.Classify` 输出 `network` 标签，控制台显示「网络」；
+- 账号失败改走**冷却 + 半开探测**（`failureCooldown`）：冷却期内跳过，
+  到期自动放回轮转，成功即恢复 `ok`，再失败按 2m → 5m → 15m → 1h 递增退避。
+
 **凭据失效是唯一需要人工介入的错误**，网关会明确提示「请重新登录 CodeArts Agent」，
 并刻意**不**报成 `overloaded_error`，避免客户端无限重试。
 

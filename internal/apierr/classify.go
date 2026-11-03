@@ -14,6 +14,7 @@ import (
 //   - client_request  请求本身非法（参数越界 / 模态不符 / tools 超长，不换号）
 //   - credentials     账号凭据失效（需重新登录）
 //   - no_account      账号池为空
+//   - network         网络层抖动（连接中断 / 单次超时，不计账号故障）
 //   - transient       上游临时故障（并发上限 / 429 / 5xx，退避重试）
 //   - rate_limited    网关侧限流（本机密钥打太快）
 //   - upstream        其他上游错误
@@ -40,6 +41,11 @@ func Classify(err error) string {
 	}
 	if codearts.IsCredentialsError(err) {
 		return "credentials"
+	}
+	// 网络层抖动先于其余判定：它不是上游业务错误（UpstreamError 已被排除），
+	// 也不是请求非法，单独成类才能区分「上游 5xx」与「链路断了」。
+	if codearts.IsTransientNetwork(err) {
+		return "network"
 	}
 	if codearts.IsContentModerationError(err) {
 		return "moderation"

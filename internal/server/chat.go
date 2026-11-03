@@ -339,6 +339,22 @@ func (s *Server) withAccountRetry(ctx context.Context, timeout time.Duration, fn
 			}
 			continue
 		}
+		// 网络层抖动（连接中断 `unexpected EOF` / 单次请求超时 `context deadline
+		// exceeded`）：账号本身没坏，退避后换号重试。
+		//
+		// 2026-11-03 线上事故：这两类错误此前落到下面的 MarkAccountResult(false)，
+		// 一次抖动就把账号标成 error，而 NextAccount 又只挑 Failures==0 的账号，
+		// 等于永久踢出轮转。它们既不是上游业务错误，也不是请求非法，必须单独判。
+		if codearts.IsTransientNetwork(err) {
+			if i == attempts-1 {
+				break
+			}
+			transientWaits++
+			if err := waitRetry(ctx, transientBackoff(transientWaits)); err != nil {
+				return used, tried, lastErr
+			}
+			continue
+		}
 		// 请求本身非法（参数越界 / 模型未注册 / tools 超长）：换哪个账号都一样，
 		// 不是账号故障。计入失败会让任意客户端发错一次参数就把健康账号标成 error，
 		// 还会累加 failures 触发熔断。直接返回，让客户端去改请求。

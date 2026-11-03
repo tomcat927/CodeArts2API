@@ -440,8 +440,12 @@ func (s *Store) RemoveAccount(id string) bool {
 
 // NextAccount 以轮询方式挑一个可用账号，返回快照。
 //
-// 连续失败过多的账号会被跳过；全部不可用时回退到失败最少的那个，
-// 保证不会硬阻塞请求。
+// 选择规则（v0.1.5 起）：
+//   - 跳过停用账号与**冷却中**的账号（冷却来自上一次失败，见 failureCooldown）；
+//   - 其余账号严格轮询：健康账号与「冷却刚结束、等待半开探测」的账号同等参与。
+//     v0.1.4 及之前只要存在 Failures==0 的账号就直接返回它，导致一次网络抖动
+//     标成 error 的账号永远轮不到，等于永久损失容量（8 个账号只剩 5 个在转）。
+//   - 全部都在冷却中时兜底返回失败最少的账号，保证不会硬阻塞请求。
 func (s *Store) NextAccount() *codearts.Account {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -449,23 +453,24 @@ func (s *Store) NextAccount() *codearts.Account {
 	if n == 0 {
 		return nil
 	}
-	var best *codearts.Account
+	now := time.Now().Unix()
+	var fallback *codearts.Account
 	for i := 0; i < n; i++ {
 		idx := (s.rotate + i) % n
 		a := s.st.Accounts[idx]
 		if !a.Enabled {
 			continue
 		}
-		if best == nil || a.Failures < best.Failures {
-			best = a
+		if fallback == nil || a.Failures < fallback.Failures {
+			fallback = a
 		}
-		if a.Failures == 0 {
-			s.rotate = (idx + 1) % n
-			return cloneAccount(a)
+		if a.CooldownUntil > now {
+			continue
 		}
+		s.rotate = (idx + 1) % n
+		return cloneAccount(a)
 	}
-	s.rotate = (s.rotate + 1) % n
-	return cloneAccount(best)
+	return cloneAccount(fallback)
 }
 
 // SetAccountEnabled 启用 / 停用账号（在锁内修改，避免与控制台读取竞争）。
@@ -475,6 +480,11 @@ func (s *Store) SetAccountEnabled(id string, enabled bool) bool {
 	for _, a := range s.st.Accounts {
 		if a.ID == id {
 			a.Enabled = enabled
+			// 手动启用等于「我认为它可用」：清掉冷却，让它重新参与轮转。
+			// 失败计数保留，等到下一次成功调用自然恢复 ok（保留错误线索便于排查）。
+			if enabled {
+				a.CooldownUntil = 0
+			}
 			return true
 		}
 	}
@@ -490,10 +500,28 @@ func (s *Store) ClearAccountErrors(id string) bool {
 			a.Failures = 0
 			a.Status = "ok"
 			a.LastErr = ""
+			a.CooldownUntil = 0
 			return true
 		}
 	}
 	return false
+}
+
+// failureCooldown 返回第 failures 次连续失败后的冷却时长。
+//
+// 递增退避：一次抖动只冷却 2 分钟（下一个轮次就能半开重试），
+// 持续失败的账号逐步拉长到 1 小时，避免坏账号反复吃掉请求。
+func failureCooldown(failures int) time.Duration {
+	switch {
+	case failures <= 1:
+		return 2 * time.Minute
+	case failures == 2:
+		return 5 * time.Minute
+	case failures == 3:
+		return 15 * time.Minute
+	default:
+		return time.Hour
+	}
 }
 
 // SetAccountSession 用新的会话替换账号上缓存的凭据（续期 / 跟随 IDE 时调用）。
@@ -531,10 +559,12 @@ func (s *Store) MarkAccountResult(id string, ok bool, note string) {
 			a.Failures = 0
 			a.Status = "ok"
 			a.LastErr = ""
+			a.CooldownUntil = 0
 		} else {
 			a.Failures++
 			a.Status = "error"
 			a.LastErr = note
+			a.CooldownUntil = time.Now().Add(failureCooldown(a.Failures)).Unix()
 		}
 		return
 	}

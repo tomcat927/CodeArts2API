@@ -285,7 +285,13 @@ type Account struct {
 	Failures int    `json:"failures"`
 	LastErr  string `json:"last_err,omitempty"`
 	LastUsed int64  `json:"last_used"`
-	Note     string `json:"note,omitempty"`
+	// CooldownUntil 是熔断冷却的截止时间（unix 秒）。
+	//
+	// 失败后进入冷却，NextAccount 在冷却期内跳过该账号；到期后自动放回轮转做一次
+	// 半开探测，成功即恢复 ok，再失败则按失败次数加倍冷却。这样避免两个极端：
+	// 一次抖动就永久踢出账号（v0.1.4 及之前），以及坏账号被持续打满流量。
+	CooldownUntil int64  `json:"cooldown_until,omitempty"`
+	Note          string `json:"note,omitempty"`
 	// 每日运营活动福利的领取记录（按本地日期去重）
 	LastClaimDate string `json:"last_claim_date,omitempty"`
 	LastClaimAt   int64  `json:"last_claim_at,omitempty"`

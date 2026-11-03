@@ -26,6 +26,7 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 			"user_data": a.UserData, "enabled": a.Enabled,
 			"status": a.Status, "note": a.Note, "last_err": a.LastErr,
 			"failures": a.Failures, "last_used": a.LastUsed,
+			"cooldown_until":  a.CooldownUntil,
 			"last_claim_date": a.LastClaimDate, "last_claim_at": a.LastClaimAt,
 			"last_claim_err": a.LastClaimErr,
 			"last_claim_msg": a.LastClaimMsg,

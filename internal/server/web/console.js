@@ -412,6 +412,16 @@
       if (a.enabled) {
         var okStatus = a.status === "ok";
         statusCell.appendChild(pill(okStatus ? "ok" : (a.status || "error"), okStatus ? "ok" : "err"));
+        // 失败账号会进入冷却，冷却期内不参与轮转；到期自动做一次半开探测。
+        if (!okStatus && a.cooldown_until) {
+          var cdLeft = a.cooldown_until * 1000 - Date.now();
+          var cd = mk("span", "sub", cdLeft > 0 ? "冷却 " + fmtDur(Math.ceil(cdLeft / 1000)) : "待探测");
+          cd.title = cdLeft > 0
+            ? "冷却期内不参与轮转，到期自动放一次探测请求，成功即恢复 ok"
+            : "冷却已到期，下次轮询会放一次探测请求";
+          statusCell.appendChild(document.createTextNode(" "));
+          statusCell.appendChild(cd);
+        }
       } else {
         statusCell.appendChild(pill("已停用"));
       }
@@ -503,6 +513,7 @@
       moderation:["审核","warn"], client_request:["参数","warn"],
       credentials:["登录态","err"], no_account:["无账号","err"],
       transient:["临时","warn"], rate_limited:["限流","warn"],
+      network:["网络","warn"],
       upstream:["上游","err"], client_abort:["中断","muted"], internal:["内部","err"]
     };
     logs.forEach(function(l){

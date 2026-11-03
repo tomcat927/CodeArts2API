@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 
@@ -47,6 +48,8 @@ func TestClassify(t *testing.T) {
 		}, "transient"},
 		{"上游 402（其他业务错误）", &codearts.UpstreamError{Status: 402, Message: "quota"}, "upstream"},
 		{"客户端断开", context.Canceled, "client_abort"},
+		{"网络中断（unexpected EOF）", io.ErrUnexpectedEOF, "network"},
+		{"单次请求超时", context.DeadlineExceeded, "network"},
 		{"网关内部错误", errors.New("json marshal failed"), "internal"},
 	}
 	for _, c := range cases {

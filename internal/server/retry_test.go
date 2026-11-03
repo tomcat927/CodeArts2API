@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -109,6 +111,70 @@ func TestWithAccountRetryMarksHardFailure(t *testing.T) {
 		if acct := s.Store.Account(id); acct.Failures == 0 {
 			t.Errorf("账号 %s 的硬失败没有计数", id)
 		}
+	}
+}
+
+// TestWithAccountRetryNetworkErrorKeepsAccountHealthy 回归 2026-11-03 线上事故：
+// `unexpected EOF` / `context deadline exceeded` 属于网络层抖动，必须换号重试，
+// **不能**计入账号故障 —— 否则一次抖动就把健康账号永久踢出轮转。
+func TestWithAccountRetryNetworkErrorKeepsAccountHealthy(t *testing.T) {
+	s := newTestServer(t, 2, 2)
+
+	restore := waitRetry
+	waitRetry = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { waitRetry = restore })
+
+	var seen []string
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second, func(_ context.Context, a *codearts.Account) error {
+		seen = append(seen, a.ID)
+		return fmt.Errorf("Post upstream: %w", io.ErrUnexpectedEOF)
+	})
+	if err == nil {
+		t.Fatal("全部尝试失败时应返回错误")
+	}
+	if len(seen) != 2 {
+		t.Fatalf("网络抖动尝试了 %d 次，期望 2 次（换号重试）", len(seen))
+	}
+	if seen[0] == seen[1] {
+		t.Fatalf("两次尝试都落在账号 %s，没有换号", seen[0])
+	}
+	for _, id := range seen {
+		acct := s.Store.Account(id)
+		if acct.Failures != 0 {
+			t.Errorf("账号 %s 的网络抖动被计入失败次数: %d", id, acct.Failures)
+		}
+		if acct.Status != "ok" {
+			t.Errorf("账号 %s 因网络抖动被标记为 %q", id, acct.Status)
+		}
+		if acct.CooldownUntil != 0 {
+			t.Errorf("账号 %s 因网络抖动进入冷却: %d", id, acct.CooldownUntil)
+		}
+	}
+}
+
+// TestWithAccountRetryTimeoutKeepsAccountHealthy 单次请求超时同理：父 ctx 还活着，
+// 不能当成客户端断开，也不能当成账号故障。
+func TestWithAccountRetryTimeoutKeepsAccountHealthy(t *testing.T) {
+	s := newTestServer(t, 1, 2)
+
+	restore := waitRetry
+	waitRetry = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { waitRetry = restore })
+
+	var attempts int32
+	_, _, err := s.withAccountRetry(context.Background(), 5*time.Second, func(context.Context, *codearts.Account) error {
+		atomic.AddInt32(&attempts, 1)
+		return context.DeadlineExceeded
+	})
+	if err == nil {
+		t.Fatal("应返回错误")
+	}
+	if got := atomic.LoadInt32(&attempts); got < 2 {
+		t.Errorf("超时没有重试：attempts=%d", got)
+	}
+	acct := s.Store.Account("a")
+	if acct.Failures != 0 || acct.Status != "ok" {
+		t.Errorf("超时污染了账号: failures=%d status=%q", acct.Failures, acct.Status)
 	}
 }
 
