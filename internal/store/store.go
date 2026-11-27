@@ -456,6 +456,42 @@ func (s *Store) UpsertAccount(a *codearts.Account) bool {
 			}
 		}
 	}
+	// 宽松合并兜底：早期导入的记录可能既没 UserData 也没 domain_id —— domain_id
+	// 是登录流程后来才开始抓取的，老会话在后续续期时只是原样拷贝，补不上。
+	// 这样的记录身份键只能落到 AccessKey，而重登后 AK 必然轮换，必然判成新账号，
+	// 旧死号成了孤儿（2026-11-27 线上：重登 hw026318765993194 后出现两条）。
+	//
+	// 兜底规则（宁可漏合并、不可错合并）：
+	//   - 本次写入必须带 DomainID（身份本身可信）；
+	//   - 候选必须是 Status==error 的死号（即便错并，损失的也只是死号）；
+	//   - 候选的 Name 与本次相同，或备注里包含本次的华为用户名
+	//     （用户名 >= 8 字符才做子串匹配，防止短名误命中）；
+	//   - 命中多于一条视为歧义，直接放弃合并。
+	if idx < 0 && a.Session != nil && !a.Session.IsPermanent() &&
+		a.Session.DomainID != "" && a.Name != "" {
+		match := -1
+		for i, ex := range s.st.Accounts {
+			if ex.Session == nil || ex.Session.IsPermanent() || ex.Session.DomainID != "" {
+				continue
+			}
+			if ex.Status != "error" {
+				continue
+			}
+			byName := ex.Name == a.Name
+			byNote := len(a.Name) >= 8 && strings.Contains(ex.Note, a.Name)
+			if !byName && !byNote {
+				continue
+			}
+			if match >= 0 {
+				match = -2
+				break
+			}
+			match = i
+		}
+		if match >= 0 {
+			idx = match
+		}
+	}
 	if idx < 0 {
 		s.st.Accounts = append(s.st.Accounts, cloneAccount(a))
 		return true

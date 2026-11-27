@@ -170,3 +170,96 @@ func TestMergeDuplicatesCollapsesDomainGroups(t *testing.T) {
 		t.Error("不应保留已被合并的 ID")
 	}
 }
+
+// TestUpsertAccountMergesDeadRecordWithoutDomainID 回归 2026-11-27：
+// 早期导入的记录没有 domain_id（当时登录流程还没抓这个字段），重登后 AK 轮换
+// 导致身份键对不上，旧死号成了孤儿、新登录另起一条（线上：重登
+// hw026318765993194 后出现两条）。现在：新登录带 DomainID 时，对
+// 「Status==error 且同名 / 备注含华为用户名」的无 domain 死号做兜底合并。
+func TestUpsertAccountMergesDeadRecordWithoutDomainID(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.UpsertAccount(&codearts.Account{
+		ID: "old", Name: "CodeArts HSTAUQ8U", Enabled: true, Status: "error", Failures: 10,
+		Note:    "13080025897 · hw026318765993194",
+		Session: &codearts.Session{AccessKey: "AK-old", ExpiresAt: time.Now().Add(-48 * time.Hour)},
+	})
+
+	isNew := st.UpsertAccount(&codearts.Account{
+		ID: "new", Name: "hw026318765993194", Enabled: true, Status: "ok",
+		Session: &codearts.Session{
+			AccessKey: "AK-new", SecretKey: "SK-new", DomainID: "dom-1",
+			ExpiresAt: time.Now().Add(time.Hour),
+		},
+	})
+	if isNew {
+		t.Fatal("死号备注含同一华为用户名，重登应合并而不是新增")
+	}
+	if got := len(st.Accounts()); got != 1 {
+		t.Fatalf("账号数 = %d，期望 1", got)
+	}
+	got := st.Account("old")
+	if got == nil {
+		t.Fatal("合并后未保留原 ID old")
+	}
+	if got.Session == nil || got.Session.AccessKey != "AK-new" || got.Session.DomainID != "dom-1" {
+		t.Errorf("凭据未更新为新登录: %+v", got.Session)
+	}
+	if got.Status != "ok" || got.Failures != 0 {
+		t.Errorf("合并后应恢复 ok: status=%q failures=%d", got.Status, got.Failures)
+	}
+	if got.Note != "13080025897 · hw026318765993194" {
+		t.Errorf("备注被清空: %q", got.Note)
+	}
+}
+
+// TestUpsertAccountSkipsAmbiguousDeadMatch 两条死号都可能匹配时视为歧义，
+// 宁可新增一条也不能猜着并错。
+func TestUpsertAccountSkipsAmbiguousDeadMatch(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"d1", "d2"} {
+		st.UpsertAccount(&codearts.Account{
+			ID: id, Name: "CodeArts " + id, Enabled: true, Status: "error", Failures: 3,
+			Note:    "手机号 · hw026318765993194",
+			Session: &codearts.Session{AccessKey: "AK-" + id, ExpiresAt: time.Now().Add(-time.Hour)},
+		})
+	}
+	isNew := st.UpsertAccount(&codearts.Account{
+		ID: "new", Name: "hw026318765993194", Enabled: true, Status: "ok",
+		Session: &codearts.Session{AccessKey: "AK-new", DomainID: "dom-1", ExpiresAt: time.Now().Add(time.Hour)},
+	})
+	if !isNew {
+		t.Fatal("多条死号同时命中应视为歧义，不合并")
+	}
+	if got := len(st.Accounts()); got != 3 {
+		t.Fatalf("账号数 = %d，期望 3", got)
+	}
+}
+
+// TestUpsertAccountDoesNotMergeHealthyRecordWithoutDomainID 活号不参与兜底合并：
+// 名字/备注撞上也不能把两条都活着的记录猜成同一条。
+func TestUpsertAccountDoesNotMergeHealthyRecordWithoutDomainID(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.UpsertAccount(&codearts.Account{
+		ID: "live", Name: "hw026318765993194", Enabled: true, Status: "ok",
+		Session: &codearts.Session{AccessKey: "AK-live", ExpiresAt: time.Now().Add(time.Hour)},
+	})
+	isNew := st.UpsertAccount(&codearts.Account{
+		ID: "new", Name: "hw026318765993194", Enabled: true, Status: "ok",
+		Session: &codearts.Session{AccessKey: "AK-new", DomainID: "dom-1", ExpiresAt: time.Now().Add(2 * time.Hour)},
+	})
+	if !isNew {
+		t.Fatal("活号不是死号，不应被兜底合并")
+	}
+	if got := len(st.Accounts()); got != 2 {
+		t.Fatalf("账号数 = %d，期望 2", got)
+	}
+}
