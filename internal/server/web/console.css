@@ -504,7 +504,13 @@ td.empty{
   white-space:nowrap;
 }
 .nowrap{white-space:nowrap}
-.cell-stack{display:flex;flex-direction:column;gap:2px}
+/* cell-stack 用在 <td> 上：不能给 td 设 display:flex —— td 脱离表格布局后，
+   连续两个 cell-stack td 会被塞进同一个匿名单元格垂直堆叠（Chrome 实测），
+   后续所有列整体左移、与表头错位（2026-11-27 线上）。改回 table-cell，
+   用块级子元素 + margin 模拟纵向堆叠。 */
+.cell-stack{display:table-cell}
+.cell-stack > *{display:block}
+.cell-stack > * + *{margin-top:2px}
 .cell-stack .sub{
   font-family:var(--font);
   font-size:11px;
