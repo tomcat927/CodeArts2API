@@ -36,17 +36,26 @@ func (s *Server) RefreshModels(ctx context.Context) error {
 	}
 	sess, err := s.Cred.Session(ctx, acct, s.resolveOptions())
 	if err != nil {
+		// 半开探测也会走到这里：失败必须记账（failures++ + 冷却），
+		// 否则冷却到期的坏账号每次都被探测、却永远不记结果，
+		// 模型清单会一直停在兜底版（2026-11-27 线上：-1017 等模型"消失"）。
+		s.Store.MarkAccountResult(acct.ID, false, err.Error())
 		return err
 	}
 
 	list, err := s.Up.FetchBuiltinModels(ctx, sess)
 	if err != nil {
+		s.Store.MarkAccountResult(acct.ID, false, err.Error())
 		return err
 	}
 	models := registry.FromBuiltin(list)
 	if len(models) == 0 {
+		s.Store.MarkAccountResult(acct.ID, false, errEmptyModelList.Error())
 		return errEmptyModelList
 	}
+
+	// 拉到真实清单说明凭据与上游都通：顺手把账号恢复 ok（半开探测的归宿）。
+	s.Store.MarkAccountResult(acct.ID, true, "")
 
 	s.Reg.Replace(models)
 
