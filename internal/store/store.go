@@ -157,6 +157,11 @@ type Store struct {
 	// inFlight 是各账号当前在飞的请求数，由请求路径 Acquire/Release 维护。
 	// 只用于调度决策，不持久化 —— 进程重启后归零，重新累计。
 	inFlight map[string]int
+	// probeAt 记录各失败账号最近一次被选为「半开探测」的时间，避免并发请求
+	// 在结果写回之前反复选中同一个坏账号。只用于调度，不持久化。
+	probeAt map[string]int64
+	// probeRotate 是半开探测的轮询下标，与普通池、到期积分池互不干扰。
+	probeRotate int
 }
 
 // DefaultSettings 返回默认设置。
@@ -604,9 +609,19 @@ const creditFreshTTL = 24 * time.Hour
 // （临时性错误）；选号时跳过已打满的账号，让溢出的请求落到其他账号。
 const perAccountInFlight = 3
 
+// probeGap 是同一个失败账号两次半开探测之间的最小间隔。
+//
+// 冷却已经决定了「失败后多久再试」，这个间隔只兜住「上次探测的请求还没
+// 结束」的窗口，防止并发请求在失败结果写回之前反复撞同一个坏账号。
+const probeGap = 30 * time.Second
+
 // NextAccount 挑一个可用账号，返回快照。
 //
 // 调度顺序：
+//  0. CreditPriority 开启时，冷却已到期的失败账号先拿一次**半开探测**（见
+//     nextProbeAccount）—— 到期积分池非空会让普通池整体被饿着，失败的账号
+//     因此永远等不到「回到轮转」的机会，状态会一直卡在 error（2026-11-27 线上：
+//     坏号 33 小时没被探测过一次）。探测失败会重新进入更长的冷却，不会反复打扰。
 //  1. CreditPriority 开启时，「积分快照（24h 内）显示即将到期额度 > 0」的健康账号
 //     先行 —— 目标是在额度过期作废前把它用掉。
 //  2. 其余账号轮询：跳过停用与**冷却中**的账号（冷却来自上一次失败，见
@@ -622,12 +637,15 @@ func (s *Store) NextAccount() *codearts.Account {
 	if n == 0 {
 		return nil
 	}
+	now := time.Now().Unix()
 	if s.st.Settings.CreditPriority {
+		if a := s.nextProbeAccount(now); a != nil {
+			return a
+		}
 		if a := s.nextExpiringAccount(); a != nil {
 			return a
 		}
 	}
-	now := time.Now().Unix()
 	// fallback 允许是冷却中的账号：全部冷却时宁可试一次也不硬阻塞。
 	// free / healthy 只在「未冷却」的账号里挑，分别表示未打满与任意可用。
 	var fallback, free, healthy *codearts.Account
@@ -660,6 +678,42 @@ func (s *Store) NextAccount() *codearts.Account {
 		return cloneAccount(healthy)
 	}
 	return cloneAccount(fallback)
+}
+
+// nextProbeAccount 挑一个「冷却已到期、该探测了」的失败账号，返回快照。
+//
+// 必须在持有 s.mu 时调用。没有需要探测的账号时返回 nil。
+//
+// 半开探测独立于普通池和到期积分池：credit_priority 开启且到期池非空时，
+// NextAccount 会直接返回到期池账号，普通池整体被饿着，失败账号连一次
+// 「冷却到期后重新参与轮转」的机会都拿不到。这里让到期的失败账号优先
+// 拿一次请求；探测失败会按 MarkAccountResult 进入更长的冷却，成功则清掉
+// failures 恢复 ok，因此不会反复打扰同一个坏账号。
+func (s *Store) nextProbeAccount(now int64) *codearts.Account {
+	n := len(s.st.Accounts)
+	if n == 0 {
+		return nil
+	}
+	if s.probeAt == nil {
+		s.probeAt = map[string]int64{}
+	}
+	for i := 0; i < n; i++ {
+		idx := (s.probeRotate + i) % n
+		a := s.st.Accounts[idx]
+		if !a.Enabled || a.Failures == 0 || a.CooldownUntil > now {
+			continue
+		}
+		if s.inFlight[a.ID] > 0 {
+			continue
+		}
+		if last := s.probeAt[a.ID]; last > 0 && now-last < int64(probeGap/time.Second) {
+			continue
+		}
+		s.probeAt[a.ID] = now
+		s.probeRotate = (idx + 1) % n
+		return cloneAccount(a)
+	}
+	return nil
 }
 
 // nextExpiringAccount 从「到期积分池」挑号，池空时返回 nil（调用方回退普通轮询）。
